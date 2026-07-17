@@ -127,6 +127,13 @@ test('floatingBubbleInitialRendererQuery primes the first collapsed mini-window 
     ),
     { period: 'today', breakdown: 'tool', floatingBubbleSide: 'left', suppressInitialNumberAnimation: '1' }
   );
+  assert.deepEqual(
+    floatingBubbleInitialRendererQuery(
+      { collapsed: false, side: null },
+      { settingsSection: 'window' }
+    ),
+    { period: 'today', breakdown: 'tool', settingsSection: 'window' }
+  );
 });
 
 test('floatingBubbleInitialRendererQuery preserves renderer view state across window rebuilds', () => {

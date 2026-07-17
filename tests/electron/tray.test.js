@@ -268,7 +268,7 @@ test('Codex tray account selection waits for a post-switch local provider snapsh
 test('tray main-process actions surface refresh errors and expand a collapsed bubble before tray mode', () => {
   const source = fs.readFileSync(path.join(__dirname, '../../src/electron/main.js'), 'utf8');
   assert.match(source, /async function refreshFromTray[\s\S]*?catch \(error\)[\s\S]*?showTrayRefreshError\(error\?\.message \|\| error\)/);
-  assert.match(source, /if \(value === 'tray'\)[\s\S]*?saveSettings\(\);\s*syncFloatingBubbleAvailability\(\);\s*enterTrayMode\(\);/);
+  assert.match(source, /if \(value === 'tray'\)[\s\S]*?saveSettings\(\);\s*syncFloatingBubbleAvailability\(\);\s*rebuildWindow\(\);\s*enterTrayMode\(\);/);
 });
 
 test('usage tray icon picks the top token client for day and total token modes', () => {

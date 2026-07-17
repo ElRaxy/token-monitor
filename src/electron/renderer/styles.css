@@ -212,6 +212,15 @@ body.is-windows.floating-bubble-collapsed-right .floating-bubble-tab {
   gap: 12px;
   min-height: 30px;
 }
+.is-mac-native-controls .titlebar { padding-left: 68px; }
+.is-mac-native-controls .app-title { display: none; }
+.has-right-native-controls .titlebar {
+  width: env(titlebar-area-width, calc(100% - 138px));
+}
+.is-windows.uses-system-window-controls .titlebar > div:first-child { display: none; }
+.is-windows.uses-system-window-controls .titlebar { justify-content: flex-start; }
+body.floating-bubble-collapsed-left .titlebar,
+body.floating-bubble-collapsed-right .titlebar { padding-left: 0; }
 .shell.desktop-mode .titlebar { -webkit-app-region: no-drag; }
 .titlebar > div:first-child { min-width: 0; flex: 1 1 auto; }
 .app-title {
@@ -389,6 +398,28 @@ body.is-windows.floating-bubble-collapsed-right .floating-bubble-tab {
   transform: translateY(2px);
   pointer-events: none;
   transition-delay: 0ms;
+}
+.uses-system-window-controls .actions-hotspot,
+.uses-system-window-controls .window-actions { display: none; }
+.uses-system-window-controls .title-controls {
+  min-width: 105px;
+  height: auto;
+}
+.uses-system-window-controls .title-controls .tabs,
+.shell.uses-system-window-controls.settings-open .title-controls .tabs {
+  position: static;
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+  transition: none;
+}
+@media (max-width: 300px) {
+  .has-right-native-controls .titlebar > div:first-child { display: none; }
+  .has-right-native-controls .title-controls {
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
+  }
 }
 .icon-button, .refresh-button, .settings-actions button, .shortcut-recorder button, .tab, .mode-button, .home-empty-action, .home-module-empty-action {
   border: 1px solid var(--line);

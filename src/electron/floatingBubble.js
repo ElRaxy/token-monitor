@@ -76,6 +76,9 @@ function floatingBubbleInitialRendererQuery(state = {}, options = false) {
   if (optionObject?.suppressInitialNumberAnimation === true) {
     query.suppressInitialNumberAnimation = '1';
   }
+  if (typeof optionObject?.settingsSection === 'string' && optionObject.settingsSection) {
+    query.settingsSection = optionObject.settingsSection;
+  }
   return Object.keys(query).length ? query : null;
 }
 

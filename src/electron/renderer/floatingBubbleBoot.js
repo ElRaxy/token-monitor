@@ -18,4 +18,6 @@
   if (Object.keys(viewState).length > 0) window.__TOKEN_MONITOR_INITIAL_VIEW_STATE__ = viewState;
   window.__TOKEN_MONITOR_SUPPRESS_INITIAL_NUMBER_ANIMATION__ =
     query.get('suppressInitialNumberAnimation') === '1';
+  const settingsSection = query.get('settingsSection');
+  if (settingsSection) window.__TOKEN_MONITOR_INITIAL_SETTINGS_SECTION__ = settingsSection;
 })();

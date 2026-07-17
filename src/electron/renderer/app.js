@@ -195,6 +195,7 @@ const REFRESH_BUTTON_FEEDBACK_MS = 700;
 const CODEX_PENDING_ACTIVE_GRACE_MS = 30000;
 const initialFloatingBubble = window.__TOKEN_MONITOR_INITIAL_FLOATING_BUBBLE__ || { collapsed: false, side: null };
 const initialViewState = window.__TOKEN_MONITOR_INITIAL_VIEW_STATE__ || {};
+const initialSettingsSection = window.__TOKEN_MONITOR_INITIAL_SETTINGS_SECTION__ || '';
 let initialBreakdownPreferenceApplied = typeof initialViewState.breakdown === 'string';
 
 function normalizeInitialViewValue(value, allowed, fallback) {
@@ -213,7 +214,7 @@ let directBreakdownOverride = null;
 state.projectSettingsExpanded = false;
 state.homeActivitySettingsExpanded = false;
 state.settingsSections = Object.fromEntries(SETTINGS_SECTION_IDS.map((id) => [id, false]));
-const defaultAppearance = { glassOpacity: 68, glassBlur: 32, zoomFactor: 1, systemGlass: true, reduceMotion: 'system', showLiveDot: true, showToolIcons: true, titleIconOnly: true, showCompactTotalTokens: false, settingsInTitlebar: false };
+const defaultAppearance = { glassOpacity: 68, glassBlur: 32, zoomFactor: 1, systemGlass: true, reduceMotion: 'system', showLiveDot: true, showToolIcons: true, titleIconOnly: true, showCompactTotalTokens: false, settingsInTitlebar: false, systemWindowControls: false };
 let preferenceDrag = null;
 let viewSwitcherLongPressTimer = null;
 let viewSwitcherLongPressTriggered = false;
@@ -281,6 +282,7 @@ Object.assign(els, {
   titleIconInput: document.getElementById('titleIconInput'),
   showCompactTotalTokensInput: document.getElementById('showCompactTotalTokensInput'),
   swapSettingsRefreshInput: document.getElementById('swapSettingsRefreshInput'),
+  systemWindowControlsInput: document.getElementById('systemWindowControlsInput'),
   resetClientDisplayOrderButton: document.getElementById('resetClientDisplayOrderButton'),
   showAllClientsButton: document.getElementById('showAllClientsButton'),
   resetViewDisplayOrderButton: document.getElementById('resetViewDisplayOrderButton'),
@@ -4478,6 +4480,7 @@ function applyControlLayout(swapSettingsAndRefresh) {
 }
 
 function applyAppearanceSettings(settings) {
+  const effectiveSettings = { ...(state.settings || {}), ...(settings || {}) };
   const opacity = clamp(settings?.glassOpacity ?? 68, 0, 100) / 100;
   const depth = clamp(settings?.glassBlur ?? 32, 0, 100) / 100;
   const systemGlassDisabled = settings?.systemGlass === false;
@@ -4491,17 +4494,16 @@ function applyAppearanceSettings(settings) {
   // Only full settings objects carry themeColors; glass/zoom preview patches
   // omit it, so we must not wipe theme overrides mid-slider-drag.
   if (settings && 'themeColors' in settings) applyThemeColors(settings.themeColors);
-  els.liveDot.style.display = (settings?.showLiveDot !== false) ? '' : 'none';
-  els.shell.classList.toggle('desktop-mode', settings?.windowBehavior === 'desktop');
-  els.shell.classList.toggle('title-icon-only', settings?.titleIconOnly === true);
-  const trayMode = settings && 'trayMode' in settings
-    ? settings.trayMode === true
-    : state.settings?.trayMode === true;
+  els.liveDot.style.display = (effectiveSettings.showLiveDot !== false) ? '' : 'none';
+  els.shell.classList.toggle('desktop-mode', effectiveSettings.windowBehavior === 'desktop');
+  els.shell.classList.toggle('title-icon-only', effectiveSettings.titleIconOnly === true);
+  const trayMode = effectiveSettings.trayMode === true;
   els.shell.classList.toggle('tray-mode', trayMode);
-  if (settings && ('settingsInTitlebar' in settings || 'trayMode' in settings)) {
-    applyControlLayout(settings.settingsInTitlebar === true);
-  }
+  applyControlLayout(effectiveSettings.settingsInTitlebar === true);
   const isWindows = navigator.userAgent.toLowerCase().includes('windows');
+  const isMac = state.appInfo?.platform === 'darwin' || navigator.userAgent.toLowerCase().includes('mac os x');
+  const useSystemControls = effectiveSettings.systemWindowControls === true && !trayMode;
+  const hasRightNativeControls = useSystemControls && (isWindows || state.appInfo?.platform === 'linux');
   
   let isMacLegacyRadius = false;
   if (!isWindows && state.appInfo?.platform === 'darwin' && state.appInfo?.osRelease) {
@@ -4515,6 +4517,14 @@ function applyAppearanceSettings(settings) {
   
   document.documentElement.classList.toggle('is-windows', isWindows);
   document.body.classList.toggle('is-windows', isWindows);
+
+  document.documentElement.classList.toggle('uses-system-window-controls', useSystemControls);
+  document.body.classList.toggle('uses-system-window-controls', useSystemControls);
+  els.shell.classList.toggle('uses-system-window-controls', useSystemControls);
+  document.documentElement.classList.toggle('is-mac-native-controls', isMac && useSystemControls);
+  document.body.classList.toggle('is-mac-native-controls', isMac && useSystemControls);
+  document.documentElement.classList.toggle('has-right-native-controls', hasRightNativeControls);
+  document.body.classList.toggle('has-right-native-controls', hasRightNativeControls);
   
   document.documentElement.classList.toggle('is-mac-legacy', isMacLegacyRadius);
   document.body.classList.toggle('is-mac-legacy', isMacLegacyRadius);
@@ -5343,6 +5353,7 @@ function syncSettingsForm() {
   els.titleIconInput.checked = state.settings.titleIconOnly === true;
   els.showCompactTotalTokensInput.checked = state.settings.showCompactTotalTokens === true;
   els.swapSettingsRefreshInput.checked = state.settings.settingsInTitlebar === true;
+  els.systemWindowControlsInput.checked = state.settings.systemWindowControls === true;
   els.discordRpcInput.checked = Boolean(state.settings.discordRpcEnabled);
   syncWindowBehaviorControls();
   els.floatingBubbleInput.checked = state.settings.floatingBubbleEnabled === true;
@@ -6759,6 +6770,10 @@ async function init() {
     state.settings.startAtLogin = Boolean(state.appInfo.loginItemOpenAtLogin);
   }
   syncSettingsForm();
+  if (SETTINGS_SECTION_IDS.includes(initialSettingsSection)) {
+    openSettingsPanel();
+    setSettingsSectionExpanded(initialSettingsSection, true);
+  }
   publishViewState();
   await refreshHubInfo();
   await refreshTokscaleStatus();
@@ -7039,6 +7054,7 @@ els.swapSettingsRefreshInput.addEventListener('change', () => {
 });
 els.discordRpcInput.addEventListener('change', saveAppearanceFromControls);
 els.windowBehaviorInput.addEventListener('change', () => saveSettings({ windowBehavior: els.windowBehaviorInput.value }));
+els.systemWindowControlsInput.addEventListener('change', () => saveSettings({ systemWindowControls: els.systemWindowControlsInput.checked }));
 els.floatingBubbleInput.addEventListener('change', () => {
   els.floatingBubbleOptions?.classList.toggle('hidden', !els.floatingBubbleInput.checked);
   saveSettings({ floatingBubbleEnabled: els.floatingBubbleInput.checked });

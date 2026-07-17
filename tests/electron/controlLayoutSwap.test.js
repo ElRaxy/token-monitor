@@ -57,6 +57,54 @@ test('default layout groups Refresh with Settings in the footer', () => {
   );
 });
 
+test('custom hover controls remain the default title-bar layout', () => {
+  const html = readRendererFile('index.html');
+  const css = readRendererFile('styles.css');
+  const titlebar = html.match(/<header class="titlebar">[\s\S]*?<\/header>/)?.[0] || '';
+
+  assert.match(titlebar, /class="app-title"/);
+  assert.match(titlebar, /class="actions-hotspot"/);
+  assert.match(titlebar, /class="window-actions"/);
+  assert.match(titlebar, /id="pinButton"/);
+  assert.match(titlebar, /id="minButton"/);
+  assert.match(titlebar, /id="closeButton"/);
+  assert.match(cssRule(css, '.window-actions'), /opacity:\s*0/);
+});
+
+test('system controls are opt-in and suppress only the custom title-bar actions', () => {
+  const app = readRendererFile('app.js');
+  const css = readRendererFile('styles.css');
+
+  assert.match(app, /systemWindowControls:\s*false/);
+  assert.match(app, /const useSystemControls = effectiveSettings\.systemWindowControls === true && !trayMode/);
+  assert.match(app, /is-mac-native-controls', isMac && useSystemControls/);
+  assert.match(app, /has-right-native-controls', hasRightNativeControls/);
+  assert.equal(declaration(cssRule(css, '.uses-system-window-controls .actions-hotspot,\n.uses-system-window-controls .window-actions'), 'display'), 'none');
+  assert.equal(declaration(cssRule(css, '.is-mac-native-controls .titlebar'), 'padding-left'), '68px');
+  assert.equal(declaration(cssRule(css, '.is-mac-native-controls .app-title'), 'display'), 'none');
+  assert.match(cssRule(css, '.has-right-native-controls .titlebar'), /titlebar-area-width/);
+  assert.equal(declaration(cssRule(css, '.is-windows.uses-system-window-controls .titlebar > div:first-child'), 'display'), 'none');
+  assert.equal(declaration(cssRule(css, '.is-windows.uses-system-window-controls .titlebar'), 'justify-content'), 'flex-start');
+});
+
+test('window settings expose the system-controls preference in every locale', () => {
+  const html = readRendererFile('index.html');
+  const app = readRendererFile('app.js');
+  const { MESSAGES } = require('../../src/electron/renderer/i18n.js');
+
+  assert.match(html, /id="systemWindowControlsInput"/);
+  assert.match(html, /data-i18n="settings\.display\.systemWindowControls"/);
+  assert.match(html, /data-i18n="settings\.display\.systemWindowControlsNote"/);
+  assert.match(app, /systemWindowControlsInput: document\.getElementById\('systemWindowControlsInput'\)/);
+  assert.match(app, /els\.systemWindowControlsInput\.checked = state\.settings\.systemWindowControls === true/);
+  assert.match(app, /saveSettings\(\{ systemWindowControls: els\.systemWindowControlsInput\.checked \}\)/);
+  assert.match(app, /SETTINGS_SECTION_IDS\.includes\(initialSettingsSection\)[\s\S]*?openSettingsPanel\(\);[\s\S]*?setSettingsSectionExpanded\(initialSettingsSection, true\)/);
+  for (const locale of Object.keys(MESSAGES)) {
+    assert.ok(MESSAGES[locale]?.['settings.display.systemWindowControls'], `${locale} has the control label`);
+    assert.ok(MESSAGES[locale]?.['settings.display.systemWindowControlsNote'], `${locale} has the control note`);
+  }
+});
+
 test('applyControlLayout keeps both controls in the footer and swaps their roles', () => {
   const app = readRendererFile('app.js');
   const body = functionBody(app, 'applyControlLayout', 'applyAppearanceSettings');
@@ -148,7 +196,7 @@ test('tray mode removes title-bar hover controls only while Settings is closed',
   const app = readRendererFile('app.js');
   const css = readRendererFile('styles.css');
 
-  assert.match(app, /'trayMode' in settings[\s\S]*state\.settings\?\.trayMode === true/, 'partial appearance previews preserve the full tray-mode state');
+  assert.match(app, /const effectiveSettings = \{ \.\.\.\(state\.settings \|\| \{\}\), \.\.\.\(settings \|\| \{\}\) \}/, 'partial appearance previews preserve the full tray-mode state');
   assert.match(app, /els\.shell\.classList\.toggle\('tray-mode', trayMode\)/);
   const hiddenHotspot = cssRule(css, '.shell.tray-mode:not(.settings-open) .actions-hotspot');
   assert.equal(declaration(hiddenHotspot, 'display'), 'none');
@@ -168,7 +216,7 @@ test('appearance settings expose a Settings/Refresh swap wired to the legacy pre
   assert.match(app, /settingsInTitlebar: false/, 'legacy persisted preference defaults to the standard order');
   assert.match(app, /settingsInTitlebar: Boolean\(els\.swapSettingsRefreshInput\.checked\)/, 'patch keeps writing the compatible setting key');
   assert.match(app, /els\.swapSettingsRefreshInput\.checked = state\.settings\.settingsInTitlebar === true/, 'populate reflects the saved value');
-  assert.match(app, /'settingsInTitlebar' in settings \|\| 'trayMode' in settings[\s\S]*applyControlLayout\(settings\.settingsInTitlebar === true\)/, 'apply guards on key presence then swaps the footer controls');
+  assert.match(app, /applyControlLayout\(effectiveSettings\.settingsInTitlebar === true\)/, 'appearance updates preserve the footer control order');
   assert.match(app, /els\.swapSettingsRefreshInput\.addEventListener\('change', \(\) => \{[\s\S]*applyControlLayout\(els\.swapSettingsRefreshInput\.checked\);[\s\S]*void saveAppearanceFromControls\(\);[\s\S]*\}\)/, 'change swaps immediately, then persists');
 });
 
