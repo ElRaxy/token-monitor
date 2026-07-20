@@ -156,13 +156,10 @@ const {
   moveFloatingBubbleBounds
 } = require('./floatingBubble');
 const {
-  DEFAULT_SYSTEM_WINDOW_CONTROLS,
   nativeWindowChromeOptions,
-  observeMainFrameLoad,
-  windowChromeRequiresReplacement,
-  windowChromeState,
   windowChromeTransition
 } = require('./nativeWindowChrome');
+const { observeMainFrameLoad } = require('./windowLoad');
 const { applyWindowsChrome } = require('./windowsChrome');
 
 if (!app.isPackaged) loadDotEnv();
@@ -248,7 +245,7 @@ function defaultSettings() {
     showToolIcons: true,
     titleIconOnly: true,
     showCompactTotalTokens: false,
-    systemWindowControls: DEFAULT_SYSTEM_WINDOW_CONTROLS,
+    systemWindowControls: false,
     heatmapMetric: 'cost',
     themeColors: {},
     vendorColors: {},
@@ -1255,7 +1252,7 @@ function collapseFloatingBubble(plan) {
   floatingBubbleState.expandedBounds = expandedBounds;
   settings.floatingBubbleBounds = collapsedBounds;
   applyNativeMaterial();
-  if (windowChromeRequiresReplacement(process.platform, mainWindowChrome)) {
+  if (process.platform === 'win32' || mainWindowChrome.systemWindowControls) {
     persistWindowBounds(expandedBounds);
     replaceMainWindow(collapsedBounds, {
       collapsedFloatingBubble: true,
@@ -1592,7 +1589,7 @@ function readSettings() {
     merged.floatingBubbleEnabled = parseBoolean(merged.floatingBubbleEnabled ?? merged.edgeDrawerEnabled, false);
     merged.archivedClientUsage = normalizeArchivedClientUsage(merged.archivedClientUsage);
     delete merged.edgeDrawerEnabled;
-    merged.systemWindowControls = parseBoolean(merged.systemWindowControls, DEFAULT_SYSTEM_WINDOW_CONTROLS);
+    merged.systemWindowControls = parseBoolean(merged.systemWindowControls, false);
     merged.floatingBubbleTrigger = merged.floatingBubbleTrigger === 'hover' ? 'hover' : 'click';
     merged.floatingBubbleContent = normalizeTrayContent(merged.floatingBubbleContent, 'icon');
     merged.showTrayProviderBadge = parseBoolean(merged.showTrayProviderBadge, false);
@@ -3484,7 +3481,6 @@ function loadWindowFile(target, options = {}) {
 function createWindow(boundsOverride, options = {}) {
   ensureSettingsLoaded();
   const collapsedFloatingBubble = options.collapsedFloatingBubble === true;
-  const windowChrome = windowChromeState(settings, { collapsedFloatingBubble });
   const glass = nativeBlurEnabled();
   const bounds = boundsOverride || restoredBounds() || DEFAULT_WINDOW;
   const collapsedSizeLimits = {
@@ -3499,9 +3495,9 @@ function createWindow(boundsOverride, options = {}) {
     ...(typeof bounds.x === 'number' ? { x: bounds.x, y: bounds.y } : {}),
     ...(collapsedFloatingBubble ? collapsedSizeLimits : WINDOW_LIMITS),
     ...nativeWindowChromeOptions(process.platform, {
-      systemWindowControls: windowChrome.systemWindowControls,
-      collapsed: windowChrome.collapsedFloatingBubble,
-      trayOnly: windowChrome.trayOnly
+      systemWindowControls: Boolean(settings?.systemWindowControls),
+      collapsed: collapsedFloatingBubble,
+      trayOnly: Boolean(settings?.trayMode)
     }),
     transparent: !(process.platform === 'win32' && glass),
     resizable: !collapsedFloatingBubble,
@@ -3520,7 +3516,11 @@ function createWindow(boundsOverride, options = {}) {
     }
   });
   mainWindow = win;
-  mainWindowChrome = windowChrome;
+  mainWindowChrome = {
+    systemWindowControls: Boolean(settings?.systemWindowControls),
+    collapsedFloatingBubble,
+    trayOnly: Boolean(settings?.trayMode)
+  };
   applyWindowsChrome(win, { round: !collapsedFloatingBubble });
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedExternalUrl(url)) shell.openExternal(url);
@@ -3559,7 +3559,7 @@ function createWindow(boundsOverride, options = {}) {
   win.webContents.on('before-input-event', handleZoomShortcut);
   win.webContents.once('did-finish-load', sendFloatingBubbleState);
   if (typeof options.onMainFrameLoadSettled === 'function') {
-    observeMainFrameLoad(win.webContents, options.onMainFrameLoadSettled);
+    observeMainFrameLoad(win.webContents, (result) => options.onMainFrameLoadSettled(win, result));
   }
   loadWindowFile(win, {
     waitForContent: options.waitForContent === true,
@@ -3741,13 +3741,9 @@ function rebuildWindow(options = {}) {
   if (replacingWithHiddenTrayWindow) old.hide();
   // Build the new window first so total window count never drops to 0
   // (otherwise window-all-closed fires and quits the app on Windows).
-  let next = null;
-  let finished = false;
-  const finishReplacement = () => {
-    if (finished) return;
-    finished = true;
+  const finishReplacement = (next) => {
     if (!old.isDestroyed()) old.destroy();
-    if (shouldFocus && next && !next.isDestroyed() && !replacingWithHiddenTrayWindow) next.focus();
+    if (shouldFocus && !next.isDestroyed() && !replacingWithHiddenTrayWindow) next.focus();
   };
   createWindow(bounds, {
     suppressInitialNumberAnimation: true,
@@ -3756,8 +3752,8 @@ function rebuildWindow(options = {}) {
     settingsSection: options.settingsSection,
     ...(replacingWithHiddenTrayWindow ? { onMainFrameLoadSettled: finishReplacement } : {})
   });
-  next = mainWindow;
-  if (!replacingWithHiddenTrayWindow) next.once('show', finishReplacement);
+  const next = mainWindow;
+  if (!replacingWithHiddenTrayWindow) next.once('show', () => finishReplacement(next));
 }
 
 app.whenReady().then(() => {
@@ -3896,10 +3892,7 @@ app.whenReady().then(() => {
       showToolIcons: patch.showToolIcons ?? settings.showToolIcons ?? true,
       titleIconOnly: parseBoolean(patch.titleIconOnly ?? settings.titleIconOnly, false),
       showCompactTotalTokens: parseBoolean(patch.showCompactTotalTokens ?? settings.showCompactTotalTokens, false),
-      systemWindowControls: parseBoolean(
-        patch.systemWindowControls ?? settings.systemWindowControls,
-        DEFAULT_SYSTEM_WINDOW_CONTROLS
-      ),
+      systemWindowControls: parseBoolean(patch.systemWindowControls ?? settings.systemWindowControls, false),
       floatingBubbleEnabled: parseBoolean(patch.floatingBubbleEnabled ?? settings.floatingBubbleEnabled, false),
       discordRpcEnabled: patch.discordRpcEnabled ?? settings.discordRpcEnabled ?? false,
       limitsEnabled: parseBoolean(patch.limitsEnabled ?? settings.limitsEnabled, true),
