@@ -155,7 +155,14 @@ const {
   normalizeInitialRendererViewState,
   moveFloatingBubbleBounds
 } = require('./floatingBubble');
-const { nativeWindowChromeOptions } = require('./nativeWindowChrome');
+const {
+  DEFAULT_SYSTEM_WINDOW_CONTROLS,
+  nativeWindowChromeOptions,
+  observeMainFrameLoad,
+  windowChromeRequiresReplacement,
+  windowChromeState,
+  windowChromeTransition
+} = require('./nativeWindowChrome');
 const { applyWindowsChrome } = require('./windowsChrome');
 
 if (!app.isPackaged) loadDotEnv();
@@ -241,7 +248,7 @@ function defaultSettings() {
     showToolIcons: true,
     titleIconOnly: true,
     showCompactTotalTokens: false,
-    systemWindowControls: false,
+    systemWindowControls: DEFAULT_SYSTEM_WINDOW_CONTROLS,
     heatmapMetric: 'cost',
     themeColors: {},
     vendorColors: {},
@@ -1248,7 +1255,7 @@ function collapseFloatingBubble(plan) {
   floatingBubbleState.expandedBounds = expandedBounds;
   settings.floatingBubbleBounds = collapsedBounds;
   applyNativeMaterial();
-  if (process.platform === 'win32' || mainWindowChrome.systemWindowControls) {
+  if (windowChromeRequiresReplacement(process.platform, mainWindowChrome)) {
     persistWindowBounds(expandedBounds);
     replaceMainWindow(collapsedBounds, {
       collapsedFloatingBubble: true,
@@ -1585,7 +1592,7 @@ function readSettings() {
     merged.floatingBubbleEnabled = parseBoolean(merged.floatingBubbleEnabled ?? merged.edgeDrawerEnabled, false);
     merged.archivedClientUsage = normalizeArchivedClientUsage(merged.archivedClientUsage);
     delete merged.edgeDrawerEnabled;
-    merged.systemWindowControls = parseBoolean(merged.systemWindowControls, false);
+    merged.systemWindowControls = parseBoolean(merged.systemWindowControls, DEFAULT_SYSTEM_WINDOW_CONTROLS);
     merged.floatingBubbleTrigger = merged.floatingBubbleTrigger === 'hover' ? 'hover' : 'click';
     merged.floatingBubbleContent = normalizeTrayContent(merged.floatingBubbleContent, 'icon');
     merged.showTrayProviderBadge = parseBoolean(merged.showTrayProviderBadge, false);
@@ -3477,6 +3484,7 @@ function loadWindowFile(target, options = {}) {
 function createWindow(boundsOverride, options = {}) {
   ensureSettingsLoaded();
   const collapsedFloatingBubble = options.collapsedFloatingBubble === true;
+  const windowChrome = windowChromeState(settings, { collapsedFloatingBubble });
   const glass = nativeBlurEnabled();
   const bounds = boundsOverride || restoredBounds() || DEFAULT_WINDOW;
   const collapsedSizeLimits = {
@@ -3491,9 +3499,9 @@ function createWindow(boundsOverride, options = {}) {
     ...(typeof bounds.x === 'number' ? { x: bounds.x, y: bounds.y } : {}),
     ...(collapsedFloatingBubble ? collapsedSizeLimits : WINDOW_LIMITS),
     ...nativeWindowChromeOptions(process.platform, {
-      systemWindowControls: Boolean(settings?.systemWindowControls),
-      collapsed: collapsedFloatingBubble,
-      trayOnly: Boolean(settings?.trayMode)
+      systemWindowControls: windowChrome.systemWindowControls,
+      collapsed: windowChrome.collapsedFloatingBubble,
+      trayOnly: windowChrome.trayOnly
     }),
     transparent: !(process.platform === 'win32' && glass),
     resizable: !collapsedFloatingBubble,
@@ -3512,11 +3520,7 @@ function createWindow(boundsOverride, options = {}) {
     }
   });
   mainWindow = win;
-  mainWindowChrome = {
-    systemWindowControls: Boolean(settings?.systemWindowControls),
-    collapsedFloatingBubble,
-    trayOnly: Boolean(settings?.trayMode)
-  };
+  mainWindowChrome = windowChrome;
   applyWindowsChrome(win, { round: !collapsedFloatingBubble });
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedExternalUrl(url)) shell.openExternal(url);
@@ -3554,6 +3558,9 @@ function createWindow(boundsOverride, options = {}) {
   });
   win.webContents.on('before-input-event', handleZoomShortcut);
   win.webContents.once('did-finish-load', sendFloatingBubbleState);
+  if (typeof options.onMainFrameLoadSettled === 'function') {
+    observeMainFrameLoad(win.webContents, options.onMainFrameLoadSettled);
+  }
   loadWindowFile(win, {
     waitForContent: options.waitForContent === true,
     inactive: options.inactive === true,
@@ -3734,19 +3741,23 @@ function rebuildWindow(options = {}) {
   if (replacingWithHiddenTrayWindow) old.hide();
   // Build the new window first so total window count never drops to 0
   // (otherwise window-all-closed fires and quits the app on Windows).
+  let next = null;
+  let finished = false;
+  const finishReplacement = () => {
+    if (finished) return;
+    finished = true;
+    if (!old.isDestroyed()) old.destroy();
+    if (shouldFocus && next && !next.isDestroyed() && !replacingWithHiddenTrayWindow) next.focus();
+  };
   createWindow(bounds, {
     suppressInitialNumberAnimation: true,
     waitForContent: true,
     inactive: !shouldFocus,
-    settingsSection: options.settingsSection
+    settingsSection: options.settingsSection,
+    ...(replacingWithHiddenTrayWindow ? { onMainFrameLoadSettled: finishReplacement } : {})
   });
-  const next = mainWindow;
-  const finishReplacement = () => {
-    if (!old.isDestroyed()) old.destroy();
-    if (shouldFocus && !next.isDestroyed() && !replacingWithHiddenTrayWindow) next.focus();
-  };
-  if (replacingWithHiddenTrayWindow) next.webContents.once('did-finish-load', finishReplacement);
-  else next.once('show', finishReplacement);
+  next = mainWindow;
+  if (!replacingWithHiddenTrayWindow) next.once('show', finishReplacement);
 }
 
 app.whenReady().then(() => {
@@ -3885,7 +3896,10 @@ app.whenReady().then(() => {
       showToolIcons: patch.showToolIcons ?? settings.showToolIcons ?? true,
       titleIconOnly: parseBoolean(patch.titleIconOnly ?? settings.titleIconOnly, false),
       showCompactTotalTokens: parseBoolean(patch.showCompactTotalTokens ?? settings.showCompactTotalTokens, false),
-      systemWindowControls: parseBoolean(patch.systemWindowControls ?? settings.systemWindowControls, false),
+      systemWindowControls: parseBoolean(
+        patch.systemWindowControls ?? settings.systemWindowControls,
+        DEFAULT_SYSTEM_WINDOW_CONTROLS
+      ),
       floatingBubbleEnabled: parseBoolean(patch.floatingBubbleEnabled ?? settings.floatingBubbleEnabled, false),
       discordRpcEnabled: patch.discordRpcEnabled ?? settings.discordRpcEnabled ?? false,
       limitsEnabled: parseBoolean(patch.limitsEnabled ?? settings.limitsEnabled, true),
@@ -3972,13 +3986,14 @@ app.whenReady().then(() => {
     applyWindowSettings();
     syncFloatingBubbleAvailability();
     const nextNativeMaterial = nativeBlurEnabled();
+    const chromeTransition = windowChromeTransition(
+      { trayMode: previousTrayMode, systemWindowControls: previousSystemWindowControls },
+      settings,
+      { platform: process.platform, previousNativeMaterial, nextNativeMaterial }
+    );
     const trayModeChanged = settings.trayMode !== previousTrayMode;
-    const systemWindowControlsChanged = settings.systemWindowControls !== previousSystemWindowControls;
-    if (trayModeChanged || systemWindowControlsChanged || (process.platform === 'win32' && previousNativeMaterial !== nextNativeMaterial)) {
-      rebuildWindow({
-        ...(systemWindowControlsChanged ? { settingsSection: 'window' } : {}),
-        ...(trayModeChanged && !settings.trayMode ? { focus: true } : {})
-      });
+    if (chromeTransition.rebuild) {
+      rebuildWindow(chromeTransition.rebuildOptions);
     } else {
       applyNativeMaterial();
     }
