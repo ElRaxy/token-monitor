@@ -271,6 +271,18 @@ test('tray main-process actions surface refresh errors and expand a collapsed bu
   assert.match(source, /if \(value === 'tray'\)[\s\S]*?saveSettings\(\);\s*syncFloatingBubbleAvailability\(\);\s*rebuildWindow\(\);\s*enterTrayMode\(\);/);
 });
 
+test('failed tray window replacement restores a previously visible popover', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../../src/electron/main.js'), 'utf8');
+  assert.match(
+    source,
+    /function reconcileWindowAfterReplacementFailure[\s\S]*?if \(settings\?\.trayMode\) \{\s*enterTrayMode\(\);\s*if \(snapshot\.visible\) showPopover\(\{ focus: shouldFocus \}\);\s*return;/
+  );
+  assert.match(
+    source,
+    /function showPopover\(options = \{\}\)[\s\S]*?const shouldFocus = options\.focus !== false;[\s\S]*?mainWindow\.showInactive\(\)[\s\S]*?if \(shouldFocus\) mainWindow\.focus\(\);/
+  );
+});
+
 test('usage tray icon picks the top token client for day and total token modes', () => {
   assert.equal(pickUsageTrayIconId(stats, 'tokens', ['claude', 'codex']), 'codex');
   assert.equal(pickUsageTrayIconId(stats, 'both', ['claude', 'codex']), 'codex');

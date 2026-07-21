@@ -4503,7 +4503,7 @@ function applyAppearanceSettings(settings) {
   const isWindows = navigator.userAgent.toLowerCase().includes('windows');
   const isMac = state.appInfo?.platform === 'darwin' || navigator.userAgent.toLowerCase().includes('mac os x');
   const useSystemControls = effectiveSettings.systemWindowControls === true && !trayMode;
-  const hasRightNativeControls = useSystemControls && (isWindows || state.appInfo?.platform === 'linux');
+  const hasNativeControlsOverlay = useSystemControls && (isWindows || state.appInfo?.platform === 'linux');
   
   let isMacLegacyRadius = false;
   if (!isWindows && state.appInfo?.platform === 'darwin' && state.appInfo?.osRelease) {
@@ -4523,8 +4523,8 @@ function applyAppearanceSettings(settings) {
   els.shell.classList.toggle('uses-system-window-controls', useSystemControls);
   document.documentElement.classList.toggle('is-mac-native-controls', isMac && useSystemControls);
   document.body.classList.toggle('is-mac-native-controls', isMac && useSystemControls);
-  document.documentElement.classList.toggle('has-right-native-controls', hasRightNativeControls);
-  document.body.classList.toggle('has-right-native-controls', hasRightNativeControls);
+  document.documentElement.classList.toggle('has-native-controls-overlay', hasNativeControlsOverlay);
+  document.body.classList.toggle('has-native-controls-overlay', hasNativeControlsOverlay);
   
   document.documentElement.classList.toggle('is-mac-legacy', isMacLegacyRadius);
   document.body.classList.toggle('is-mac-legacy', isMacLegacyRadius);
@@ -4682,6 +4682,7 @@ function previewThemeColor(key, value) {
   if (!themePresetsApi.isValidHex(value)) return;
   const next = { ...currentThemeOverrides(), [key]: themePresetsApi.normalizeHex(value) };
   applyThemeColors(next);
+  window.tokenMonitor.previewAppearance?.({ themeColors: next }).catch(() => {});
 }
 
 async function saveThemeColor(key, value) {

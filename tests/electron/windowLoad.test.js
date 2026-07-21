@@ -1,35 +1,29 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const { EventEmitter } = require('node:events');
 const test = require('node:test');
 
-const { observeMainFrameLoad } = require('../../src/electron/windowLoad');
+const { observeWindowLoad } = require('../../src/electron/windowLoad');
 
-test('main-frame load failures settle once and remove observers', () => {
-  const webContents = new EventEmitter();
+test('resolved loadFile promises settle successfully', async () => {
   const results = [];
-  observeMainFrameLoad(webContents, (result) => results.push(result));
-
-  webContents.emit('did-fail-load', {}, -105, 'NAME_NOT_RESOLVED', '', false);
-  webContents.emit('did-fail-load', {}, -3, 'ABORTED', '', true);
-  assert.deepEqual(results, []);
-
-  webContents.emit('did-fail-load', {}, -105, 'NAME_NOT_RESOLVED', '', true);
-  webContents.emit('did-finish-load');
-  assert.deepEqual(results, [{ ok: false, errorCode: -105, errorDescription: 'NAME_NOT_RESOLVED' }]);
-  assert.equal(webContents.listenerCount('did-fail-load'), 0);
-  assert.equal(webContents.listenerCount('did-finish-load'), 0);
+  const result = await observeWindowLoad(Promise.resolve(), {
+    onSettled: (value) => results.push(value),
+  });
+  assert.deepEqual(result, { ok: true });
+  assert.deepEqual(results, [{ ok: true }]);
 });
 
-test('successful main-frame loads settle once and remove observers', () => {
-  const webContents = new EventEmitter();
-  const results = [];
-  observeMainFrameLoad(webContents, (result) => results.push(result));
-
-  webContents.emit('did-finish-load');
-  webContents.emit('did-fail-load', {}, -105, 'NAME_NOT_RESOLVED', '', true);
-  assert.deepEqual(results, [{ ok: true }]);
-  assert.equal(webContents.listenerCount('did-fail-load'), 0);
-  assert.equal(webContents.listenerCount('did-finish-load'), 0);
+test('rejected loadFile promises roll back before normal error handling', async () => {
+  const error = new Error('renderer unavailable');
+  const order = [];
+  const result = await observeWindowLoad(Promise.reject(error), {
+    onSettled: (value) => order.push(['settled', value]),
+    onRejected: (value) => order.push(['rejected', value]),
+  });
+  assert.deepEqual(result, { ok: false, error });
+  assert.deepEqual(order, [
+    ['settled', { ok: false, error }],
+    ['rejected', error],
+  ]);
 });

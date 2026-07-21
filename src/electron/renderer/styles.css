@@ -214,8 +214,14 @@ body.is-windows.floating-bubble-collapsed-right .floating-bubble-tab {
 }
 .is-mac-native-controls .titlebar { padding-left: 68px; }
 .is-mac-native-controls .app-title { display: none; }
-.has-right-native-controls .titlebar {
-  width: env(titlebar-area-width, calc(100% - 138px));
+.has-native-controls-overlay .titlebar {
+  /* Electron reports viewport coordinates; the shell already contributes a
+     14px inline padding plus its 1px border on each side. */
+  padding-left: max(0px, calc(env(titlebar-area-x, 0px) - 15px));
+  padding-right: max(
+    0px,
+    calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 138px)) - 15px)
+  );
 }
 .is-windows.uses-system-window-controls .titlebar > div:first-child { display: none; }
 .is-windows.uses-system-window-controls .titlebar { justify-content: flex-start; }
@@ -414,11 +420,21 @@ body.floating-bubble-collapsed-right .titlebar { padding-left: 0; }
   transition: none;
 }
 @media (max-width: 300px) {
-  .has-right-native-controls .titlebar > div:first-child { display: none; }
-  .has-right-native-controls .title-controls {
+  .has-native-controls-overlay .titlebar > div:first-child { display: none; }
+  .has-native-controls-overlay .title-controls {
     flex: 1 1 auto;
     width: 100%;
     min-width: 0;
+  }
+  .has-native-controls-overlay .tabs {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    overflow: hidden;
+  }
+  .has-native-controls-overlay .tab {
+    min-width: 0;
+    padding-inline: 0;
+    overflow: hidden;
+    font-size: clamp(7px, 3.2vw, 9px);
   }
 }
 .icon-button, .refresh-button, .settings-actions button, .shortcut-recorder button, .tab, .mode-button, .home-empty-action, .home-module-empty-action {

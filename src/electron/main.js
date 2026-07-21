@@ -156,10 +156,12 @@ const {
   moveFloatingBubbleBounds
 } = require('./floatingBubble');
 const {
+  applyNativeWindowTitleBarOverlay,
   nativeWindowChromeOptions,
   windowChromeTransition
 } = require('./nativeWindowChrome');
-const { observeMainFrameLoad } = require('./windowLoad');
+const { observeWindowLoad } = require('./windowLoad');
+const { createWindowReplacementQueue, startWindowReplacementLifecycle } = require('./windowReplacement');
 const { applyWindowsChrome } = require('./windowsChrome');
 
 if (!app.isPackaged) loadDotEnv();
@@ -1129,18 +1131,24 @@ function restoredBounds() {
 let persistBoundsTimer = null;
 let floatingBubbleAutoCollapseTimer = null;
 const floatingBubbleState = { collapsed: false, side: null, collapsedBounds: null, expandedBounds: null, suppressNextCollapse: false, contentSize: null };
-let mainWindowChrome = { systemWindowControls: false, collapsedFloatingBubble: false, trayOnly: false };
+let mainWindowChrome = {
+  systemWindowControls: false,
+  collapsedFloatingBubble: false,
+  trayOnly: false,
+  nativeMaterial: false,
+};
+const windowReplacementQueue = createWindowReplacementQueue(startWindowReplacement, mergeQueuedWindowReplacement);
 
 function stopPersistBoundsTimer() {
   if (persistBoundsTimer) clearTimeout(persistBoundsTimer);
   persistBoundsTimer = null;
 }
 
-function floatingBubblePayload() {
+function floatingBubblePayload(source = floatingBubbleState) {
   return {
     enabled: canUseFloatingBubble(settings),
-    collapsed: floatingBubbleState.collapsed,
-    side: floatingBubbleState.side
+    collapsed: source.collapsed,
+    side: source.side
   };
 }
 
@@ -1169,9 +1177,9 @@ function updateRendererViewState(patch) {
   return rendererViewState;
 }
 
-function sendFloatingBubbleState() {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  try { mainWindow.webContents.send('floatingBubble:state', floatingBubblePayload()); } catch (_) {}
+function sendFloatingBubbleState(target = mainWindow, source = floatingBubbleState) {
+  if (!target || target.isDestroyed()) return;
+  try { target.webContents.send('floatingBubble:state', floatingBubblePayload(source)); } catch (_) {}
 }
 
 function stopFloatingBubbleAutoCollapseTimer() {
@@ -1179,27 +1187,27 @@ function stopFloatingBubbleAutoCollapseTimer() {
   floatingBubbleAutoCollapseTimer = null;
 }
 
-function restoreWindowSizeLimits() {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  if (typeof mainWindow.setMinimumSize === 'function') {
-    mainWindow.setMinimumSize(WINDOW_LIMITS.minWidth, WINDOW_LIMITS.minHeight);
+function restoreWindowSizeLimits(target = mainWindow) {
+  if (!target || target.isDestroyed()) return;
+  if (typeof target.setMinimumSize === 'function') {
+    target.setMinimumSize(WINDOW_LIMITS.minWidth, WINDOW_LIMITS.minHeight);
   }
-  if (typeof mainWindow.setMaximumSize === 'function') {
-    mainWindow.setMaximumSize(WINDOW_LIMITS.maxWidth, WINDOW_LIMITS.maxHeight);
+  if (typeof target.setMaximumSize === 'function') {
+    target.setMaximumSize(WINDOW_LIMITS.maxWidth, WINDOW_LIMITS.maxHeight);
   }
 }
 
-function applyCollapsedFloatingBubbleLimits(bounds) {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  if (typeof mainWindow.setMinimumSize === 'function') {
-    mainWindow.setMinimumSize(bounds?.width || FLOATING_BUBBLE_HANDLE_WIDTH, bounds?.height || FLOATING_BUBBLE_HANDLE_HEIGHT);
+function applyCollapsedFloatingBubbleLimits(bounds, target = mainWindow) {
+  if (!target || target.isDestroyed()) return;
+  if (typeof target.setMinimumSize === 'function') {
+    target.setMinimumSize(bounds?.width || FLOATING_BUBBLE_HANDLE_WIDTH, bounds?.height || FLOATING_BUBBLE_HANDLE_HEIGHT);
   }
-  if (typeof mainWindow.setMaximumSize === 'function') {
-    mainWindow.setMaximumSize(bounds?.width || FLOATING_BUBBLE_HANDLE_WIDTH, bounds?.height || FLOATING_BUBBLE_HANDLE_HEIGHT);
+  if (typeof target.setMaximumSize === 'function') {
+    target.setMaximumSize(bounds?.width || FLOATING_BUBBLE_HANDLE_WIDTH, bounds?.height || FLOATING_BUBBLE_HANDLE_HEIGHT);
   }
-  if (typeof mainWindow.setResizable === 'function') mainWindow.setResizable(false);
-  mainWindow.setAlwaysOnTop(true, process.platform === 'win32' ? 'screen-saver' : 'floating');
-  if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(true);
+  if (typeof target.setResizable === 'function') target.setResizable(false);
+  target.setAlwaysOnTop(true, process.platform === 'win32' ? 'screen-saver' : 'floating');
+  if (typeof target.setSkipTaskbar === 'function') target.setSkipTaskbar(true);
 }
 
 function displayForBounds(bounds) {
@@ -1246,22 +1254,30 @@ function collapseFloatingBubble(plan) {
   stopFloatingBubbleAutoCollapseTimer();
   const { side, expandedBounds, collapsedBounds } = plan || {};
   if (!expandedBounds || !collapsedBounds) return false;
-  floatingBubbleState.collapsed = true;
-  floatingBubbleState.side = side;
-  floatingBubbleState.collapsedBounds = collapsedBounds;
-  floatingBubbleState.expandedBounds = expandedBounds;
-  settings.floatingBubbleBounds = collapsedBounds;
+  const nextBubbleState = {
+    ...floatingBubbleState,
+    collapsed: true,
+    side,
+    collapsedBounds,
+    expandedBounds,
+  };
   applyNativeMaterial();
   if (process.platform === 'win32' || mainWindowChrome.systemWindowControls) {
     persistWindowBounds(expandedBounds);
     replaceMainWindow(collapsedBounds, {
       collapsedFloatingBubble: true,
       focus: false,
-      waitForContent: settings.floatingBubbleContent !== 'icon'
+      waitForContent: settings.floatingBubbleContent !== 'icon',
+      floatingBubbleState: nextBubbleState,
+      onCommit: () => {
+        settings.floatingBubbleBounds = collapsedBounds;
+        saveSettings();
+      },
     });
-    sendFloatingBubbleState();
     return true;
   }
+  Object.assign(floatingBubbleState, nextBubbleState);
+  settings.floatingBubbleBounds = collapsedBounds;
   applyCollapsedFloatingBubbleLimits(collapsedBounds);
   mainWindow.setBounds(collapsedBounds);
   persistWindowBounds(expandedBounds);
@@ -1295,13 +1311,16 @@ function expandFloatingBubble(options = {}) {
   const target = display
     ? expandedFloatingBubbleBounds(current, display.workArea, floatingBubbleState.expandedBounds)
     : floatingBubbleState.expandedBounds;
-  floatingBubbleState.collapsed = false;
-  floatingBubbleState.side = null;
-  floatingBubbleState.collapsedBounds = current;
-  floatingBubbleState.expandedBounds = target;
+  const nextBubbleState = {
+    ...floatingBubbleState,
+    collapsed: false,
+    side: null,
+    collapsedBounds: current,
+    expandedBounds: target,
+    suppressNextCollapse: Boolean(target),
+  };
   applyNativeMaterial();
   if (target) {
-    floatingBubbleState.suppressNextCollapse = true;
     if (mainWindowChrome.collapsedFloatingBubble) {
       persistWindowBounds(target);
       replaceMainWindow(target, {
@@ -1309,16 +1328,21 @@ function expandFloatingBubble(options = {}) {
         focus: options.focus !== false,
         suppressInitialNumberAnimation: true,
         waitForContent: true,
-        inactive: options.focus === false
+        inactive: options.focus === false,
+        floatingBubbleState: nextBubbleState,
+        onCommit: () => {
+          setTimeout(() => { floatingBubbleState.suppressNextCollapse = false; }, 300);
+        },
       });
-      setTimeout(() => { floatingBubbleState.suppressNextCollapse = false; }, 300);
-      sendFloatingBubbleState();
       return true;
     }
+    Object.assign(floatingBubbleState, nextBubbleState);
     restoreWindowSizeLimits();
     mainWindow.setBounds(target);
     persistWindowBounds(target);
     setTimeout(() => { floatingBubbleState.suppressNextCollapse = false; }, 300);
+  } else {
+    Object.assign(floatingBubbleState, nextBubbleState);
   }
   applyWindowSettings();
   sendFloatingBubbleState();
@@ -1339,16 +1363,20 @@ function scheduleFloatingBubbleAutoCollapse() {
   }, 180);
 }
 
-function syncFloatingBubbleAvailability() {
+function syncFloatingBubbleAvailability(options = {}) {
   if (!canUseFloatingBubble(settings)) {
-    if (floatingBubbleState.collapsed) expandFloatingBubble({ focus: false });
+    if (floatingBubbleState.collapsed && !options.deferWindowReplacement) {
+      expandFloatingBubble({ focus: false });
+    }
     else {
-      floatingBubbleState.side = null;
-      floatingBubbleState.collapsedBounds = null;
-      floatingBubbleState.expandedBounds = null;
-      floatingBubbleState.suppressNextCollapse = false;
       stopFloatingBubbleAutoCollapseTimer();
-      restoreWindowSizeLimits();
+      if (!floatingBubbleState.collapsed) {
+        floatingBubbleState.side = null;
+        floatingBubbleState.collapsedBounds = null;
+        floatingBubbleState.expandedBounds = null;
+        floatingBubbleState.suppressNextCollapse = false;
+        restoreWindowSizeLimits();
+      }
     }
     sendFloatingBubbleState();
     return;
@@ -1748,48 +1776,57 @@ function applyMacActivationPolicy(state = {}) {
   else app.dock.show();
 }
 
-function applyWindowSettings() {
-  if (!mainWindow) return;
-  if (floatingBubbleState.collapsed) {
-    applyCollapsedFloatingBubbleLimits(mainWindow.getBounds());
+function applyWindowSettings(target = mainWindow, bubbleState = floatingBubbleState, source = settings) {
+  if (!target || target.isDestroyed()) return;
+  if (bubbleState.collapsed) {
+    applyCollapsedFloatingBubbleLimits(target.getBounds(), target);
     return;
   }
-  const behavior = describeWindowBehavior(settings);
-  mainWindow.setAlwaysOnTop(behavior.alwaysOnTop, 'floating');
-  if (typeof mainWindow.setMovable === 'function') mainWindow.setMovable(behavior.draggable);
-  if (typeof mainWindow.setResizable === 'function') mainWindow.setResizable(behavior.resizable);
-  if (typeof mainWindow.setIgnoreMouseEvents === 'function') {
-    mainWindow.setIgnoreMouseEvents(behavior.mousePassthrough);
+  const behavior = describeWindowBehavior(source);
+  target.setAlwaysOnTop(behavior.alwaysOnTop, 'floating');
+  if (typeof target.setMovable === 'function') target.setMovable(behavior.draggable);
+  if (typeof target.setResizable === 'function') target.setResizable(behavior.resizable);
+  if (typeof target.setIgnoreMouseEvents === 'function') {
+    target.setIgnoreMouseEvents(behavior.mousePassthrough);
   }
-  if (typeof mainWindow.setFocusable === 'function') mainWindow.setFocusable(behavior.focusable);
-  if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(Boolean(settings?.trayMode));
-  if (!behavior.focusable && typeof mainWindow.blur === 'function') mainWindow.blur();
+  if (typeof target.setFocusable === 'function') target.setFocusable(behavior.focusable);
+  if (typeof target.setSkipTaskbar === 'function') target.setSkipTaskbar(Boolean(source?.trayMode));
+  if (!behavior.focusable && typeof target.blur === 'function') target.blur();
 }
 
 function nativeBlurEnabled(source = settings) {
   return floatingBubbleNativeGlassEnabled(source);
 }
 
-function keepNativeBlurActive() {
-  if (!mainWindow) return;
-  if (!nativeBlurEnabled()) return;
-  if (process.platform === 'darwin' && typeof mainWindow.setVisualEffectState === 'function') {
-    mainWindow.setVisualEffectState('active');
+function keepNativeBlurActive(target = mainWindow, source = settings) {
+  if (!target || target.isDestroyed()) return;
+  if (!nativeBlurEnabled(source)) return;
+  if (process.platform === 'darwin' && typeof target.setVisualEffectState === 'function') {
+    target.setVisualEffectState('active');
   }
 }
 
-function applyNativeMaterial(source = settings) {
-  if (!mainWindow) return;
+function applyNativeMaterial(source = settings, target = mainWindow) {
+  if (!target || target.isDestroyed()) return;
   const enabled = nativeBlurEnabled(source);
-  if (process.platform === 'darwin' && typeof mainWindow.setVibrancy === 'function') {
-    mainWindow.setVibrancy(enabled ? 'hud' : null);
-    if (typeof mainWindow.setVisualEffectState === 'function') {
-      mainWindow.setVisualEffectState(enabled ? 'active' : 'inactive');
+  if (process.platform === 'darwin' && typeof target.setVibrancy === 'function') {
+    target.setVibrancy(enabled ? 'hud' : null);
+    if (typeof target.setVisualEffectState === 'function') {
+      target.setVisualEffectState(enabled ? 'active' : 'inactive');
     }
   }
   // Windows: backgroundMaterial is locked in at window creation. setBackgroundMaterial('none')
   // does not restore layered-window transparency once DWM SystemBackdrop has been engaged,
   // so toggling is handled by rebuildWindow() instead.
+}
+
+function applyNativeWindowControlOverlay(target = mainWindow, source = settings, chrome = mainWindowChrome) {
+  return applyNativeWindowTitleBarOverlay(target, process.platform, {
+    systemWindowControls: chrome.systemWindowControls,
+    collapsed: chrome.collapsedFloatingBubble,
+    trayOnly: chrome.trayOnly,
+    themeColors: source?.themeColors,
+  });
 }
 
 function withHistoryPreview(stats, devices) {
@@ -2462,7 +2499,7 @@ async function startStatsStream(options = {}) {
   }
 }
 
-function showPopover() {
+function showPopover(options = {}) {
   if (!mainWindow || mainWindow.isDestroyed() || !tray) return;
   applyMacActivationPolicy();
   applyWindowSettings();
@@ -2470,8 +2507,10 @@ function showPopover() {
   const target = popoverBounds(tray, current.width, current.height);
   mainWindow.setBounds(target);
   suppressNextBlurHide = true;
-  mainWindow.show();
-  mainWindow.focus();
+  const shouldFocus = options.focus !== false;
+  if (!shouldFocus && typeof mainWindow.showInactive === 'function') mainWindow.showInactive();
+  else mainWindow.show();
+  if (shouldFocus) mainWindow.focus();
   // The focus event itself may not fire a blur; the suppress flag covers the
   // case where macOS fires blur immediately after show because the click that
   // opened us still has the menu bar as the focused element.
@@ -3436,8 +3475,12 @@ function revealWindow(target = mainWindow, options = {}) {
 
 function loadWindowFile(target, options = {}) {
   let revealed = false;
+  let revealRequested = false;
+  let loadSucceeded = false;
+  let fallbackTimer = null;
   const reveal = () => {
-    if (revealed) return;
+    revealRequested = true;
+    if (!loadSucceeded || revealed) return;
     revealed = true;
     if (settings?.trayMode) return; // stay hidden until tray click
     revealWindow(target, { inactive: options.inactive === true });
@@ -3446,9 +3489,9 @@ function loadWindowFile(target, options = {}) {
   const onContentReady = (event) => {
     if (event.sender === target.webContents) reveal();
   };
-  const fallbackTimer = setTimeout(reveal, 2500);
   const cleanup = () => {
-    clearTimeout(fallbackTimer);
+    if (fallbackTimer) clearTimeout(fallbackTimer);
+    fallbackTimer = null;
     ipcMain.removeListener('window:contentReady', onContentReady);
   };
   target.once('show', cleanup);
@@ -3458,29 +3501,43 @@ function loadWindowFile(target, options = {}) {
     // async stats fetch resolves; revealing on load would flash empty content.
     // Wait until the renderer reports it has rendered real data instead.
     ipcMain.on('window:contentReady', onContentReady);
-    target.webContents.once('did-finish-load', () => applyZoomFactor(target));
   } else {
     target.once('ready-to-show', reveal);
-    target.webContents.once('did-finish-load', () => {
-      applyZoomFactor(target);
-      reveal();
-    });
   }
-  target.webContents.once('did-fail-load', (_event, code, description) => {
-    console.log(`[window] renderer load failed: ${code} ${description}`);
-    reveal();
-  });
   const filePath = path.join(__dirname, 'renderer', 'index.html');
-  const load = options.query ? target.loadFile(filePath, { query: options.query }) : target.loadFile(filePath);
-  load.catch((error) => {
-    console.log(`[window] renderer load failed: ${error.message}`);
-    reveal();
+  let load;
+  try {
+    load = options.query ? target.loadFile(filePath, { query: options.query }) : target.loadFile(filePath);
+  } catch (error) {
+    load = Promise.reject(error);
+  }
+  return observeWindowLoad(load, {
+    onSettled: (result) => {
+      if (result.ok) {
+        loadSucceeded = true;
+        applyZoomFactor(target);
+        if (waitForContent) {
+          if (revealRequested) reveal();
+          else fallbackTimer = setTimeout(reveal, 2500);
+        } else {
+          reveal();
+        }
+      } else {
+        cleanup();
+      }
+      options.onLoadSettled?.(result);
+    },
+    onRejected: (error) => {
+      console.log(`[window] renderer load failed: ${error.message}`);
+      if (options.revealOnLoadFailure !== false) revealWindow(target, { inactive: options.inactive === true });
+    },
   });
 }
 
 function createWindow(boundsOverride, options = {}) {
   ensureSettingsLoaded();
   const collapsedFloatingBubble = options.collapsedFloatingBubble === true;
+  const windowBubbleState = options.floatingBubbleState || floatingBubbleState;
   const glass = nativeBlurEnabled();
   const bounds = boundsOverride || restoredBounds() || DEFAULT_WINDOW;
   const collapsedSizeLimits = {
@@ -3489,15 +3546,22 @@ function createWindow(boundsOverride, options = {}) {
     maxWidth: bounds.width,
     maxHeight: bounds.height
   };
+  const chrome = {
+    systemWindowControls: Boolean(settings?.systemWindowControls),
+    collapsedFloatingBubble,
+    trayOnly: Boolean(settings?.trayMode),
+    nativeMaterial: glass,
+  };
   const win = new BrowserWindow({
     width: bounds.width,
     height: bounds.height,
     ...(typeof bounds.x === 'number' ? { x: bounds.x, y: bounds.y } : {}),
     ...(collapsedFloatingBubble ? collapsedSizeLimits : WINDOW_LIMITS),
     ...nativeWindowChromeOptions(process.platform, {
-      systemWindowControls: Boolean(settings?.systemWindowControls),
-      collapsed: collapsedFloatingBubble,
-      trayOnly: Boolean(settings?.trayMode)
+      systemWindowControls: chrome.systemWindowControls,
+      collapsed: chrome.collapsedFloatingBubble,
+      trayOnly: chrome.trayOnly,
+      themeColors: settings?.themeColors
     }),
     transparent: !(process.platform === 'win32' && glass),
     resizable: !collapsedFloatingBubble,
@@ -3515,13 +3579,11 @@ function createWindow(boundsOverride, options = {}) {
       nodeIntegration: false
     }
   });
-  mainWindow = win;
-  mainWindowChrome = {
-    systemWindowControls: Boolean(settings?.systemWindowControls),
-    collapsedFloatingBubble,
-    trayOnly: Boolean(settings?.trayMode)
-  };
-  applyWindowsChrome(win, { round: !collapsedFloatingBubble });
+  if (options.adopt !== false) {
+    mainWindow = win;
+    mainWindowChrome = chrome;
+  }
+  applyWindowsChrome(win, { round: true });
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedExternalUrl(url)) shell.openExternal(url);
     return { action: 'deny' };
@@ -3530,16 +3592,16 @@ function createWindow(boundsOverride, options = {}) {
     event.preventDefault();
     if (isAllowedExternalUrl(url)) shell.openExternal(url);
   });
-  applyWindowSettings();
-  applyNativeMaterial();
-  keepNativeBlurActive();
+  applyWindowSettings(win, windowBubbleState);
+  applyNativeMaterial(settings, win);
+  keepNativeBlurActive(win);
   win.on('focus', () => {
     stopFloatingBubbleAutoCollapseTimer();
-    keepNativeBlurActive();
+    keepNativeBlurActive(win);
   });
   win.on('blur', () => {
-    keepNativeBlurActive();
-    if (settings?.trayMode && !suppressNextBlurHide && !quitRequested) hidePopover();
+    keepNativeBlurActive(win);
+    if (settings?.trayMode && !suppressNextBlurHide && !quitRequested) win.hide();
     else if (!quitRequested) scheduleFloatingBubbleAutoCollapse();
   });
   win.on('resized', persistBoundsSoon);
@@ -3549,7 +3611,7 @@ function createWindow(boundsOverride, options = {}) {
     const action = mainWindowCloseAction(settings, { platform: process.platform });
     if (action === 'hidePopover') {
       event.preventDefault();
-      hidePopover();
+      win.hide();
     } else if (action === 'hideWindow') {
       event.preventDefault();
       win.hide();
@@ -3557,15 +3619,14 @@ function createWindow(boundsOverride, options = {}) {
     }
   });
   win.webContents.on('before-input-event', handleZoomShortcut);
-  win.webContents.once('did-finish-load', sendFloatingBubbleState);
-  if (typeof options.onMainFrameLoadSettled === 'function') {
-    observeMainFrameLoad(win.webContents, (result) => options.onMainFrameLoadSettled(win, result));
-  }
+  win.webContents.once('did-finish-load', () => sendFloatingBubbleState(win, windowBubbleState));
   loadWindowFile(win, {
     waitForContent: options.waitForContent === true,
     inactive: options.inactive === true,
+    onLoadSettled: options.onLoadSettled,
+    revealOnLoadFailure: options.revealOnLoadFailure,
     query: {
-      ...floatingBubbleInitialRendererQuery(floatingBubbleState, {
+      ...floatingBubbleInitialRendererQuery(windowBubbleState, {
         collapsedWindow: collapsedFloatingBubble,
         suppressInitialNumberAnimation: options.suppressInitialNumberAnimation === true,
         settingsSection: options.settingsSection,
@@ -3574,6 +3635,7 @@ function createWindow(boundsOverride, options = {}) {
       ...(settings?.systemGlass === false ? { systemGlassDisabled: '1' } : {})
     }
   });
+  return { win, chrome };
 }
 
 function handleZoomShortcut(event, input) {
@@ -3590,24 +3652,134 @@ function handleZoomShortcut(event, input) {
   else if (key === '0') { event.preventDefault(); setZoomFactor(1); }
 }
 
-function replaceMainWindow(bounds, options = {}) {
+function mergeQueuedWindowReplacement(previous, next) {
+  if (previous.kind !== 'rebuild' || next.kind !== 'rebuild') return { ...next };
+  return {
+    ...next,
+    focus: previous.focus === true || next.focus === true ? true : next.focus,
+    createOptions: { ...previous.createOptions, ...next.createOptions },
+  };
+}
+
+function reconcileWindowAfterReplacementFailure(old, snapshot, shouldFocus) {
+  if (quitRequested || !old || old.isDestroyed()) return;
+  if (settings?.trayMode) {
+    enterTrayMode();
+    if (snapshot.visible) showPopover({ focus: shouldFocus });
+    return;
+  }
+  if (snapshot.chrome.trayOnly) exitTrayMode({ reveal: false });
+  else applyWindowSettings(old);
+  const shouldReveal = snapshot.visible || snapshot.chrome.trayOnly || shouldFocus;
+  if (!shouldReveal) return;
+  if (old.isMinimized()) old.restore();
+  old.show();
+  if (shouldFocus) old.focus();
+}
+
+function restoreCommittedWindowChromeSettings(chrome, details = {}) {
+  if (!settings || quitRequested || details.reason === 'superseded' || details.reason === 'cancelled') return false;
+  settings.systemWindowControls = chrome.systemWindowControls;
+  settings.trayMode = chrome.trayOnly;
+  settings.systemGlass = chrome.nativeMaterial;
+  try {
+    saveSettings({ throwOnError: true });
+  } catch (error) {
+    console.log(`[window] failed to persist replacement rollback: ${error.message}`);
+  }
+  return true;
+}
+
+function startWindowReplacement(plan, complete) {
   const old = mainWindow;
-  const wasFocused = old && !old.isDestroyed() ? old.isFocused() : false;
-  if (old && !old.isDestroyed()) old.removeAllListeners('close');
-  // Build the new window first so total window count never drops to 0
-  // (otherwise window-all-closed fires and quits the app on Windows).
-  createWindow(bounds, {
-    collapsedFloatingBubble: options.collapsedFloatingBubble === true,
-    suppressInitialNumberAnimation: options.suppressInitialNumberAnimation === true,
-    waitForContent: options.waitForContent === true,
-    inactive: options.inactive === true
-  });
-  const next = mainWindow;
-  next.once('show', () => {
-    if (old && !old.isDestroyed()) old.destroy();
-    if ((options.focus === true || (options.focus !== false && wasFocused)) && !next.isDestroyed()) {
-      next.focus();
-    }
+  if (!old || old.isDestroyed()) {
+    complete();
+    return null;
+  }
+
+  const snapshot = {
+    chrome: { ...mainWindowChrome },
+    focused: old.isFocused(),
+    visible: old.isVisible(),
+  };
+  const shouldFocus = plan.focus === true || (plan.focus !== false && snapshot.focused);
+  const trayOnly = Boolean(settings?.trayMode);
+  const bubbleState = { ...floatingBubbleState, ...(plan.bubbleState || {}) };
+
+  if (trayOnly) old.hide();
+  return startWindowReplacementLifecycle({
+    hidden: trayOnly,
+    // Build the candidate without adopting it. The committed mainWindow stays
+    // healthy until load + reveal succeeds, and keeps the count above zero.
+    createCandidate: (onLoadSettled) => createWindow(plan.bounds, {
+      ...plan.createOptions,
+      adopt: false,
+      floatingBubbleState: bubbleState,
+      inactive: !shouldFocus || plan.createOptions?.inactive === true,
+      onLoadSettled,
+      revealOnLoadFailure: false,
+    }),
+    onCommit: (candidate) => {
+      const next = candidate.win;
+      if (quitRequested || next.isDestroyed()) return;
+      mainWindow = next;
+      mainWindowChrome = candidate.chrome;
+      Object.assign(floatingBubbleState, bubbleState);
+      if (!old.isDestroyed()) {
+        old.removeAllListeners('close');
+        old.destroy();
+      }
+      try {
+        applyWindowSettings(next, bubbleState, settings);
+        applyNativeMaterial(settings, next);
+        candidate.chrome.nativeMaterial = nativeBlurEnabled(settings);
+      } catch (error) {
+        console.log(`[window] failed to replay settings after replacement: ${error.message}`);
+      }
+      applyNativeWindowControlOverlay(next, settings, candidate.chrome);
+      applyZoomFactor(next);
+      plan.onCommit?.(next);
+      sendFloatingBubbleState(next);
+      pushSettingsToRenderer();
+      if (shouldFocus && !trayOnly) next.focus();
+    },
+    onRollback: (candidate, details) => {
+      const next = candidate?.win;
+      if (next && !next.isDestroyed()) {
+        next.removeAllListeners('close');
+        next.destroy();
+      }
+      const settingsRestored = plan.kind === 'rebuild'
+        ? restoreCommittedWindowChromeSettings(snapshot.chrome, details)
+        : false;
+      reconcileWindowAfterReplacementFailure(old, snapshot, shouldFocus);
+      if (settingsRestored) {
+        applyNativeMaterial(settings, old);
+        applyNativeWindowControlOverlay(old, settings, snapshot.chrome);
+        pushSettingsToRenderer();
+      }
+      plan.onRollback?.(details);
+    },
+    onError: (error) => {
+      console.log(`[window] replacement failed: ${error.message}`);
+    },
+  }, complete);
+}
+
+function replaceMainWindow(bounds, options = {}) {
+  return windowReplacementQueue.request({
+    kind: 'floating-bubble',
+    bounds,
+    focus: options.focus,
+    bubbleState: options.floatingBubbleState,
+    onCommit: options.onCommit,
+    onRollback: options.onRollback,
+    createOptions: {
+      collapsedFloatingBubble: options.collapsedFloatingBubble === true,
+      suppressInitialNumberAnimation: options.suppressInitialNumberAnimation === true,
+      waitForContent: options.waitForContent === true,
+      inactive: options.inactive === true,
+    },
   });
 }
 
@@ -3723,37 +3895,31 @@ function normalizeManualCookie(input) {
 }
 
 function rebuildWindow(options = {}) {
-  if (!mainWindow) return;
-  const bounds = floatingBubbleState.collapsed && floatingBubbleState.expandedBounds
-    ? floatingBubbleState.expandedBounds
-    : mainWindow.getBounds();
-  const wasFocused = mainWindow.isFocused();
-  const shouldFocus = options.focus === true || wasFocused;
-  const old = mainWindow;
-  floatingBubbleState.collapsed = false;
-  floatingBubbleState.side = null;
-  floatingBubbleState.collapsedBounds = null;
-  floatingBubbleState.expandedBounds = null;
-  floatingBubbleState.suppressNextCollapse = false;
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  const bounds = mainWindowChrome.trayOnly && !settings?.trayMode
+    ? restoredBounds() || DEFAULT_WINDOW
+    : floatingBubbleState.collapsed && floatingBubbleState.expandedBounds
+      ? floatingBubbleState.expandedBounds
+      : mainWindow.getBounds();
   stopFloatingBubbleAutoCollapseTimer();
-  old.removeAllListeners('close');
-  const replacingWithHiddenTrayWindow = Boolean(settings?.trayMode);
-  if (replacingWithHiddenTrayWindow) old.hide();
-  // Build the new window first so total window count never drops to 0
-  // (otherwise window-all-closed fires and quits the app on Windows).
-  const finishReplacement = (next) => {
-    if (!old.isDestroyed()) old.destroy();
-    if (shouldFocus && !next.isDestroyed() && !replacingWithHiddenTrayWindow) next.focus();
-  };
-  createWindow(bounds, {
-    suppressInitialNumberAnimation: true,
-    waitForContent: true,
-    inactive: !shouldFocus,
-    settingsSection: options.settingsSection,
-    ...(replacingWithHiddenTrayWindow ? { onMainFrameLoadSettled: finishReplacement } : {})
+  return windowReplacementQueue.request({
+    kind: 'rebuild',
+    bounds,
+    focus: options.focus,
+    bubbleState: {
+      ...floatingBubbleState,
+      collapsed: false,
+      side: null,
+      collapsedBounds: null,
+      expandedBounds: null,
+      suppressNextCollapse: false,
+    },
+    createOptions: {
+      suppressInitialNumberAnimation: true,
+      waitForContent: true,
+      settingsSection: options.settingsSection,
+    },
   });
-  const next = mainWindow;
-  if (!replacingWithHiddenTrayWindow) next.once('show', () => finishReplacement(next));
 }
 
 app.whenReady().then(() => {
@@ -3977,18 +4143,20 @@ app.whenReady().then(() => {
     else if (!settings.discordRpcEnabled && previousDiscordRpcEnabled) stopDiscordRpc();
     else if (settings.discordRpcEnabled && settings.currency !== previousCurrency && latestStats) updateDiscordRpc(latestStats, settings.currency);
     applyWindowSettings();
-    syncFloatingBubbleAvailability();
     const nextNativeMaterial = nativeBlurEnabled();
     const chromeTransition = windowChromeTransition(
       { trayMode: previousTrayMode, systemWindowControls: previousSystemWindowControls },
       settings,
       { platform: process.platform, previousNativeMaterial, nextNativeMaterial }
     );
+    syncFloatingBubbleAvailability({ deferWindowReplacement: chromeTransition.rebuild });
     const trayModeChanged = settings.trayMode !== previousTrayMode;
     if (chromeTransition.rebuild) {
       rebuildWindow(chromeTransition.rebuildOptions);
     } else {
       applyNativeMaterial();
+      mainWindowChrome.nativeMaterial = nextNativeMaterial;
+      applyNativeWindowControlOverlay();
     }
     if (
       settings.hubMode !== previousHubMode ||
@@ -4051,7 +4219,9 @@ app.whenReady().then(() => {
     return settingsForRenderer();
   });
   ipcMain.handle('appearance:preview', (_event, patch) => {
-    applyNativeMaterial({ ...settings, ...patch });
+    const previewSettings = { ...settings, ...patch };
+    applyNativeMaterial(previewSettings);
+    applyNativeWindowControlOverlay(mainWindow, previewSettings);
     if (patch && patch.zoomFactor !== undefined && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.setZoomFactor(clampZoom(patch.zoomFactor));
     }

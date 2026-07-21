@@ -11,6 +11,10 @@ function readRendererFile(name) {
   return fs.readFileSync(path.join(rendererDir, name), 'utf8');
 }
 
+function readMainFile() {
+  return fs.readFileSync(path.join(rendererDir, '..', 'main.js'), 'utf8');
+}
+
 function cssRule(source, selector) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const match = source.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
@@ -78,13 +82,30 @@ test('system controls are opt-in and suppress only the custom title-bar actions'
   assert.match(app, /systemWindowControls:\s*false/);
   assert.match(app, /const useSystemControls = effectiveSettings\.systemWindowControls === true && !trayMode/);
   assert.match(app, /is-mac-native-controls', isMac && useSystemControls/);
-  assert.match(app, /has-right-native-controls', hasRightNativeControls/);
+  assert.match(app, /has-native-controls-overlay', hasNativeControlsOverlay/);
   assert.equal(declaration(cssRule(css, '.uses-system-window-controls .actions-hotspot,\n.uses-system-window-controls .window-actions'), 'display'), 'none');
   assert.equal(declaration(cssRule(css, '.is-mac-native-controls .titlebar'), 'padding-left'), '68px');
   assert.equal(declaration(cssRule(css, '.is-mac-native-controls .app-title'), 'display'), 'none');
-  assert.match(cssRule(css, '.has-right-native-controls .titlebar'), /titlebar-area-width/);
+  const overlayRule = cssRule(css, '.has-native-controls-overlay .titlebar');
+  assert.match(overlayRule, /titlebar-area-x/);
+  assert.match(overlayRule, /titlebar-area-width/);
+  assert.match(cssRule(css, '.has-native-controls-overlay .tabs'), /minmax\(0, 1fr\)/);
+  assert.equal(declaration(cssRule(css, '.has-native-controls-overlay .tab'), 'min-width'), '0');
   assert.equal(declaration(cssRule(css, '.is-windows.uses-system-window-controls .titlebar > div:first-child'), 'display'), 'none');
   assert.equal(declaration(cssRule(css, '.is-windows.uses-system-window-controls .titlebar'), 'justify-content'), 'flex-start');
+});
+
+test('Windows keeps DWM anti-aliased rounding for every main-window shape', () => {
+  const main = readMainFile();
+  const createWindow = functionBody(main, 'createWindow', 'handleZoomShortcut');
+  assert.match(createWindow, /applyWindowsChrome\(win, \{ round: true \}\)/);
+  assert.doesNotMatch(createWindow, /round:\s*!collapsedFloatingBubble/);
+});
+
+test('theme color previews keep the native controls in sync', () => {
+  const app = readRendererFile('app.js');
+  const preview = functionBody(app, 'previewThemeColor', 'saveThemeColor');
+  assert.match(preview, /previewAppearance\?\.\(\{ themeColors: next \}\)/);
 });
 
 test('window settings expose the system-controls preference in every locale', () => {
