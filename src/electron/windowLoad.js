@@ -65,7 +65,6 @@ function observeWindowLoad(loadPromise, handlers = {}) {
               ? Math.max(0, handlers.abortTimeoutMs)
               : 5000;
             abortTimer = setTimeout(() => settle({ ok: false, error }), timeoutMs);
-            abortTimer.unref?.();
           }
           return;
         }
