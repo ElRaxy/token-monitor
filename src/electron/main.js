@@ -3512,6 +3512,7 @@ function loadWindowFile(target, options = {}) {
     load = Promise.reject(error);
   }
   return observeWindowLoad(load, {
+    webContents: target.webContents,
     onSettled: (result) => {
       if (result.ok) {
         loadSucceeded = true;
@@ -3667,6 +3668,10 @@ function reconcileWindowAfterReplacementFailure(old, snapshot, shouldFocus) {
     enterTrayMode();
     if (snapshot.visible) showPopover({ focus: shouldFocus });
     return;
+  }
+  if (typeof old.setSkipTaskbar === 'function') old.setSkipTaskbar(false);
+  if (typeof old.setVisibleOnAllWorkspaces === 'function') {
+    old.setVisibleOnAllWorkspaces(false);
   }
   if (snapshot.chrome.trayOnly) exitTrayMode({ reveal: false });
   else applyWindowSettings(old);

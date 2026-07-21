@@ -283,6 +283,14 @@ test('failed tray window replacement restores a previously visible popover', () 
   );
 });
 
+test('failed tray transition clears tray-only native presentation state', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../../src/electron/main.js'), 'utf8');
+  assert.match(
+    source,
+    /function reconcileWindowAfterReplacementFailure[\s\S]*?old\.setSkipTaskbar\(false\)[\s\S]*?old\.setVisibleOnAllWorkspaces\(false\)/
+  );
+});
+
 test('usage tray icon picks the top token client for day and total token modes', () => {
   assert.equal(pickUsageTrayIconId(stats, 'tokens', ['claude', 'codex']), 'codex');
   assert.equal(pickUsageTrayIconId(stats, 'both', ['claude', 'codex']), 'codex');
