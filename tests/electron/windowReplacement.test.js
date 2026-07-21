@@ -6,6 +6,7 @@ const test = require('node:test');
 
 const {
   createWindowReplacementQueue,
+  mergeWindowReplacementPlans,
   startWindowReplacementLifecycle,
 } = require('../../src/electron/windowReplacement');
 
@@ -68,6 +69,38 @@ test('custom coalescing preserves rebuild hints without duplicating completion',
   starts[0].complete();
   assert.deepEqual(starts[1].options, { id: 'latest', focus: true });
   assert.equal(starts.length, 2);
+});
+
+test('a floating-bubble plan preserves the active rebuild rollback intent', () => {
+  const starts = [];
+  const queue = createWindowReplacementQueue((options, complete) => {
+    const entry = { options, complete };
+    starts.push(entry);
+    return () => complete();
+  }, mergeWindowReplacementPlans);
+
+  queue.request({
+    kind: 'rebuild',
+    focus: true,
+    createOptions: { settingsSection: 'window', waitForContent: true },
+  });
+  queue.request({
+    kind: 'floating-bubble',
+    focus: false,
+    createOptions: { collapsedFloatingBubble: true, waitForContent: false },
+  });
+
+  assert.equal(starts.length, 2);
+  assert.deepEqual(starts[1].options, {
+    kind: 'rebuild',
+    focus: false,
+    createOptions: {
+      collapsedFloatingBubble: true,
+      waitForContent: false,
+      settingsSection: 'window',
+    },
+  });
+  starts[1].complete();
 });
 
 test('load failure rolls a candidate back without committing it', () => {

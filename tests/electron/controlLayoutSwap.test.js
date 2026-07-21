@@ -105,7 +105,7 @@ test('Windows keeps DWM anti-aliased rounding for every main-window shape', () =
 test('theme color previews keep the native controls in sync', () => {
   const app = readRendererFile('app.js');
   const preview = functionBody(app, 'previewThemeColor', 'saveThemeColor');
-  assert.match(preview, /previewAppearance\?\.\(\{ themeColors: next \}\)/);
+  assert.match(preview, /previewAppearance\?\.\(\{ themeColors: next \}\)\?\.catch\?\./);
 });
 
 test('window settings expose the system-controls preference in every locale', () => {

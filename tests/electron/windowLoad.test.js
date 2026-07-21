@@ -71,6 +71,42 @@ test('a real main-frame failure after an abort settles as a failure', async () =
   assert.deepEqual(rejected, [result.error]);
 });
 
+test('an aborted load settles when its WebContents is destroyed', async () => {
+  const webContents = new EventEmitter();
+  webContents.isDestroyed = () => false;
+  const aborted = Object.assign(new Error('ERR_ABORTED'), { code: 'ERR_ABORTED' });
+  const observed = observeWindowLoad(Promise.reject(aborted), { webContents });
+
+  await Promise.resolve();
+  webContents.emit('destroyed');
+
+  assert.deepEqual(await observed, { ok: false, error: aborted });
+  assert.equal(webContents.listenerCount('destroyed'), 0);
+});
+
+test('an already-destroyed WebContents settles an aborted load immediately', async () => {
+  const webContents = new EventEmitter();
+  webContents.isDestroyed = () => true;
+  const aborted = Object.assign(new Error('ERR_ABORTED'), { code: 'ERR_ABORTED' });
+
+  assert.deepEqual(
+    await observeWindowLoad(Promise.reject(aborted), { webContents }),
+    { ok: false, error: aborted }
+  );
+});
+
+test('an aborted load without a replacement navigation times out', async () => {
+  const webContents = new EventEmitter();
+  const aborted = Object.assign(new Error('ERR_ABORTED'), { errno: -3 });
+  const result = await observeWindowLoad(Promise.reject(aborted), {
+    webContents,
+    abortTimeoutMs: 5,
+  });
+
+  assert.deepEqual(result, { ok: false, error: aborted });
+  assert.equal(webContents.listenerCount('did-finish-load'), 0);
+});
+
 test('aborted-navigation detection covers Electron error shapes', () => {
   assert.equal(isAbortedNavigation({ code: 'ERR_ABORTED' }), true);
   assert.equal(isAbortedNavigation({ code: -3 }), true);

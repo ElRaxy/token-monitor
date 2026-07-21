@@ -8,7 +8,7 @@ function createWindowReplacementQueue(startReplacement, mergeQueued = (_previous
   let queuedOptions = null;
 
   const start = (options) => {
-    const transaction = { cancel: null, completed: false, superseded: false };
+    const transaction = { cancel: null, completed: false, superseded: false, options };
     activeTransaction = transaction;
     let completed = false;
     const complete = () => {
@@ -35,7 +35,7 @@ function createWindowReplacementQueue(startReplacement, mergeQueued = (_previous
   return {
     request(options = {}) {
       if (activeTransaction) {
-        queuedOptions = queuedOptions ? mergeQueued(queuedOptions, options) : { ...options };
+        queuedOptions = mergeQueued(queuedOptions || activeTransaction.options, options);
         activeTransaction.superseded = true;
         activeTransaction.cancel?.({ superseded: true });
         return false;
@@ -45,6 +45,31 @@ function createWindowReplacementQueue(startReplacement, mergeQueued = (_previous
     },
     get active() {
       return Boolean(activeTransaction);
+    },
+  };
+}
+
+function mergeWindowReplacementPlans(previous = {}, next = {}) {
+  if (previous.kind === 'rebuild' && next.kind === 'rebuild') {
+    return {
+      ...next,
+      focus: previous.focus === true || next.focus === true ? true : next.focus,
+      createOptions: { ...previous.createOptions, ...next.createOptions },
+    };
+  }
+  if (previous.kind !== 'rebuild' || next.kind === 'rebuild') return { ...next };
+
+  const settingsSection = next.createOptions?.settingsSection
+    || previous.createOptions?.settingsSection;
+  return {
+    ...next,
+    // The latest plan still owns the candidate shape and focus behavior, but
+    // its failure must roll immutable chrome settings back to the committed
+    // window when it superseded a pending rebuild.
+    kind: 'rebuild',
+    createOptions: {
+      ...next.createOptions,
+      ...(settingsSection ? { settingsSection } : {}),
     },
   };
 }
@@ -128,4 +153,8 @@ function startWindowReplacementLifecycle(options, complete) {
   });
 }
 
-module.exports = { createWindowReplacementQueue, startWindowReplacementLifecycle };
+module.exports = {
+  createWindowReplacementQueue,
+  mergeWindowReplacementPlans,
+  startWindowReplacementLifecycle,
+};

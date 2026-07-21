@@ -161,7 +161,11 @@ const {
   windowChromeTransition
 } = require('./nativeWindowChrome');
 const { observeWindowLoad } = require('./windowLoad');
-const { createWindowReplacementQueue, startWindowReplacementLifecycle } = require('./windowReplacement');
+const {
+  createWindowReplacementQueue,
+  mergeWindowReplacementPlans,
+  startWindowReplacementLifecycle,
+} = require('./windowReplacement');
 const { applyWindowsChrome } = require('./windowsChrome');
 
 if (!app.isPackaged) loadDotEnv();
@@ -1137,7 +1141,7 @@ let mainWindowChrome = {
   trayOnly: false,
   nativeMaterial: false,
 };
-const windowReplacementQueue = createWindowReplacementQueue(startWindowReplacement, mergeQueuedWindowReplacement);
+const windowReplacementQueue = createWindowReplacementQueue(startWindowReplacement, mergeWindowReplacementPlans);
 
 function stopPersistBoundsTimer() {
   if (persistBoundsTimer) clearTimeout(persistBoundsTimer);
@@ -3651,15 +3655,6 @@ function handleZoomShortcut(event, input) {
   if (key === '=' || key === '+') { event.preventDefault(); adjustZoom(ZOOM_LIMITS.step); }
   else if (key === '-' || key === '_') { event.preventDefault(); adjustZoom(-ZOOM_LIMITS.step); }
   else if (key === '0') { event.preventDefault(); setZoomFactor(1); }
-}
-
-function mergeQueuedWindowReplacement(previous, next) {
-  if (previous.kind !== 'rebuild' || next.kind !== 'rebuild') return { ...next };
-  return {
-    ...next,
-    focus: previous.focus === true || next.focus === true ? true : next.focus,
-    createOptions: { ...previous.createOptions, ...next.createOptions },
-  };
 }
 
 function reconcileWindowAfterReplacementFailure(old, snapshot, shouldFocus) {

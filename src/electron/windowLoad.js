@@ -12,11 +12,16 @@ function observeWindowLoad(loadPromise, handlers = {}) {
   let settled = false;
   let waitingAfterAbort = false;
   let finishedBeforeAbortHandler = false;
+  let abortedError = null;
+  let abortTimer = null;
 
   return new Promise((resolve) => {
     const cleanup = () => {
+      if (abortTimer) clearTimeout(abortTimer);
+      abortTimer = null;
       webContents?.removeListener('did-finish-load', onFinished);
       webContents?.removeListener('did-fail-load', onFailed);
+      webContents?.removeListener('destroyed', onDestroyed);
     };
     const settle = (result) => {
       if (settled) return false;
@@ -39,15 +44,29 @@ function observeWindowLoad(loadPromise, handlers = {}) {
       error.code = errorCode;
       settle({ ok: false, error });
     };
+    const onDestroyed = () => {
+      if (!waitingAfterAbort) return;
+      settle({ ok: false, error: abortedError });
+    };
 
     webContents?.on('did-finish-load', onFinished);
     webContents?.on('did-fail-load', onFailed);
+    webContents?.on('destroyed', onDestroyed);
     Promise.resolve(loadPromise).then(
       () => settle({ ok: true }),
       (error) => {
         if (isAbortedNavigation(error) && webContents) {
           waitingAfterAbort = true;
-          if (finishedBeforeAbortHandler) settle({ ok: true });
+          abortedError = error;
+          if (webContents.isDestroyed?.()) settle({ ok: false, error });
+          else if (finishedBeforeAbortHandler) settle({ ok: true });
+          else {
+            const timeoutMs = Number.isFinite(handlers.abortTimeoutMs)
+              ? Math.max(0, handlers.abortTimeoutMs)
+              : 5000;
+            abortTimer = setTimeout(() => settle({ ok: false, error }), timeoutMs);
+            abortTimer.unref?.();
+          }
           return;
         }
         settle({ ok: false, error });

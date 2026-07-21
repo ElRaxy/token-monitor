@@ -4682,7 +4682,7 @@ function previewThemeColor(key, value) {
   if (!themePresetsApi.isValidHex(value)) return;
   const next = { ...currentThemeOverrides(), [key]: themePresetsApi.normalizeHex(value) };
   applyThemeColors(next);
-  window.tokenMonitor.previewAppearance?.({ themeColors: next }).catch(() => {});
+  window.tokenMonitor.previewAppearance?.({ themeColors: next })?.catch?.(() => {});
 }
 
 async function saveThemeColor(key, value) {
