@@ -103,6 +103,26 @@ test('a floating-bubble plan preserves the active rebuild rollback intent', () =
   starts[1].complete();
 });
 
+test('coalesced rebuilds preserve an earlier Settings section', () => {
+  assert.deepEqual(mergeWindowReplacementPlans({
+    kind: 'rebuild',
+    focus: true,
+    createOptions: { settingsSection: 'window', waitForContent: true },
+  }, {
+    kind: 'rebuild',
+    focus: false,
+    createOptions: { settingsSection: undefined, suppressInitialNumberAnimation: true },
+  }), {
+    kind: 'rebuild',
+    focus: true,
+    createOptions: {
+      settingsSection: 'window',
+      waitForContent: true,
+      suppressInitialNumberAnimation: true,
+    },
+  });
+});
+
 test('load failure rolls a candidate back without committing it', () => {
   const win = mockWindow();
   const calls = [];

@@ -51,10 +51,16 @@ function createWindowReplacementQueue(startReplacement, mergeQueued = (_previous
 
 function mergeWindowReplacementPlans(previous = {}, next = {}) {
   if (previous.kind === 'rebuild' && next.kind === 'rebuild') {
+    const settingsSection = next.createOptions?.settingsSection
+      ?? previous.createOptions?.settingsSection;
     return {
       ...next,
       focus: previous.focus === true || next.focus === true ? true : next.focus,
-      createOptions: { ...previous.createOptions, ...next.createOptions },
+      createOptions: {
+        ...previous.createOptions,
+        ...next.createOptions,
+        ...(settingsSection ? { settingsSection } : {}),
+      },
     };
   }
   if (previous.kind !== 'rebuild' || next.kind === 'rebuild') return { ...next };
