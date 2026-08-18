@@ -1358,12 +1358,23 @@ test('sync upload interval setting is exposed in the Multi-device Sync panel', (
 // their local drafts until the explicit Hub Save commits them.
 function fakeHubControl(value = '') {
   const listeners = new Map();
+  const attributes = new Map();
   return {
     value,
+    disabled: false,
     addEventListener(type, listener) {
       const current = listeners.get(type) || [];
       current.push(listener);
       listeners.set(type, current);
+    },
+    setAttribute(name, value) {
+      attributes.set(name, String(value));
+    },
+    removeAttribute(name) {
+      attributes.delete(name);
+    },
+    getAttribute(name) {
+      return attributes.get(name) ?? null;
     },
     async dispatch(type) {
       for (const listener of listeners.get(type) || []) await listener({ target: this });
@@ -1402,6 +1413,100 @@ function loadHubSettingsWiring(els, context) {
   );
   return vmContext;
 }
+
+test('Hub Save disables for clean and reverted drafts', async () => {
+  const els = {
+    saveSettingsButton: fakeHubControl(),
+    hubUrlInput: fakeHubControl(),
+    secretInput: fakeHubControl(),
+    deviceIdInput: fakeHubControl(),
+    syncUploadIntervalInput: fakeHubControl('0'),
+    showLimitUsedInputs: []
+  };
+  const state = {
+    settings: {
+      hubMode: 'client',
+      hubUrl: 'https://saved.example',
+      secret: 'saved-secret',
+      deviceId: 'saved-device',
+      syncUploadIntervalMs: 0
+    }
+  };
+  const patches = [];
+  let vmContext;
+  vmContext = loadHubSettingsWiring(els, {
+    state,
+    saveSettings: async (patch) => {
+      patches.push({ ...patch });
+      Object.assign(state.settings, patch);
+    },
+    refreshHubInfo: async () => {},
+    refreshHubBuildStatus: async () => {},
+    refreshStats: async () => {}
+  });
+  vmContext.syncHubDraftFields();
+
+  assert.equal(els.saveSettingsButton.disabled, true);
+  els.hubUrlInput.value = '  https://saved.example  ';
+  await els.hubUrlInput.dispatch('input');
+  assert.equal(els.saveSettingsButton.disabled, true);
+
+  els.hubUrlInput.value = 'https://draft.example';
+  await els.hubUrlInput.dispatch('input');
+  assert.equal(els.saveSettingsButton.disabled, false);
+
+  els.hubUrlInput.value = 'https://saved.example';
+  await els.hubUrlInput.dispatch('input');
+  assert.equal(els.saveSettingsButton.disabled, true);
+  await els.saveSettingsButton.dispatch('click');
+  assert.deepEqual(patches, []);
+});
+
+test('Hub Save compares Host Hub ports after canonicalizing numeric input', async () => {
+  const classList = { toggle() {} };
+  const els = {
+    saveSettingsButton: fakeHubControl(),
+    hubModeOptions: { querySelectorAll: () => [] },
+    hubClientFields: { classList },
+    hubHostFields: { classList },
+    hubPortInput: fakeHubControl(),
+    hubSecretInput: fakeHubControl(),
+    hubUrlInput: fakeHubControl(),
+    secretInput: fakeHubControl(),
+    deviceIdInput: fakeHubControl('saved-device'),
+    syncUploadIntervalInput: fakeHubControl('0'),
+    showLimitUsedInputs: []
+  };
+  const state = {
+    settings: {
+      hubMode: 'host',
+      hubHostPort: 17321,
+      hubHostSecret: 'host-secret',
+      hubUrl: '',
+      secret: '',
+      deviceId: 'saved-device',
+      syncUploadIntervalMs: 0
+    }
+  };
+  let vmContext;
+  vmContext = loadHubSettingsWiring(els, {
+    state,
+    saveSettings: async () => {},
+    refreshHubInfo: async () => {},
+    refreshHubBuildStatus: async () => {},
+    refreshStats: async () => {}
+  });
+  vmContext.syncHubDraftFields();
+
+  assert.equal(els.saveSettingsButton.disabled, true);
+  els.hubPortInput.value = '017321';
+  await els.hubPortInput.dispatch('input');
+  assert.equal(els.saveSettingsButton.disabled, true);
+
+  els.hubPortInput.value = '18000';
+  await els.hubPortInput.dispatch('input');
+  assert.equal(els.saveSettingsButton.disabled, false);
+});
 
 test('changing sync upload frequency auto-saves without replacing Hub drafts', async () => {
   const els = {
