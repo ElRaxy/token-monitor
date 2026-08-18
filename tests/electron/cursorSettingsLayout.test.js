@@ -1460,6 +1460,105 @@ test('Hub Save disables for clean and reverted drafts', async () => {
   assert.equal(els.saveSettingsButton.disabled, true);
   await els.saveSettingsButton.dispatch('click');
   assert.deepEqual(patches, []);
+
+  state.settings.hubUrl = 'https://pushed.example';
+  vmContext.syncHubDraftFields();
+  assert.equal(els.hubUrlInput.value, 'https://pushed.example');
+});
+
+test('Hub Save exposes busy state and ignores repeated clicks', async () => {
+  const els = {
+    saveSettingsButton: fakeHubControl(),
+    hubUrlInput: fakeHubControl(),
+    secretInput: fakeHubControl(),
+    deviceIdInput: fakeHubControl(),
+    syncUploadIntervalInput: fakeHubControl('0'),
+    showLimitUsedInputs: []
+  };
+  const state = {
+    settings: {
+      hubMode: 'client',
+      hubUrl: 'https://saved.example',
+      secret: 'saved-secret',
+      deviceId: 'saved-device',
+      syncUploadIntervalMs: 0
+    }
+  };
+  const patches = [];
+  let releaseSave;
+  let resolveSaveStarted;
+  const saveGate = new Promise((resolve) => { releaseSave = resolve; });
+  const saveStarted = new Promise((resolve) => { resolveSaveStarted = resolve; });
+  let vmContext;
+  vmContext = loadHubSettingsWiring(els, {
+    state,
+    saveSettings: async (patch) => {
+      patches.push({ ...patch });
+      resolveSaveStarted();
+      await saveGate;
+      Object.assign(state.settings, patch);
+    },
+    refreshHubInfo: async () => {},
+    refreshHubBuildStatus: async () => {},
+    refreshStats: async () => {}
+  });
+  vmContext.syncHubDraftFields();
+
+  els.hubUrlInput.value = 'https://draft.example';
+  await els.hubUrlInput.dispatch('input');
+  const savePromise = els.saveSettingsButton.dispatch('click');
+  await saveStarted;
+
+  assert.equal(els.saveSettingsButton.disabled, true);
+  assert.equal(els.saveSettingsButton.getAttribute('aria-busy'), 'true');
+  await els.saveSettingsButton.dispatch('click');
+  assert.deepEqual(patches, [{
+    hubUrl: 'https://draft.example',
+    secret: 'saved-secret',
+    deviceId: 'saved-device'
+  }]);
+
+  releaseSave();
+  await savePromise;
+  assert.equal(els.saveSettingsButton.disabled, true);
+  assert.equal(els.saveSettingsButton.getAttribute('aria-busy'), null);
+});
+
+test('Hub Save re-enables a failed draft after clearing busy state', async () => {
+  const els = {
+    saveSettingsButton: fakeHubControl(),
+    hubUrlInput: fakeHubControl(),
+    secretInput: fakeHubControl(),
+    deviceIdInput: fakeHubControl(),
+    syncUploadIntervalInput: fakeHubControl('0'),
+    showLimitUsedInputs: []
+  };
+  const state = {
+    settings: {
+      hubMode: 'client',
+      hubUrl: 'https://saved.example',
+      secret: 'saved-secret',
+      deviceId: 'saved-device',
+      syncUploadIntervalMs: 0
+    }
+  };
+  let vmContext;
+  vmContext = loadHubSettingsWiring(els, {
+    state,
+    saveSettings: async () => { throw new Error('save failed'); },
+    refreshHubInfo: async () => {},
+    refreshHubBuildStatus: async () => {},
+    refreshStats: async () => {}
+  });
+  vmContext.syncHubDraftFields();
+
+  els.hubUrlInput.value = 'https://draft.example';
+  await els.hubUrlInput.dispatch('input');
+  await assert.rejects(els.saveSettingsButton.dispatch('click'), /save failed/);
+
+  assert.equal(els.saveSettingsButton.disabled, false);
+  assert.equal(els.saveSettingsButton.getAttribute('aria-busy'), null);
+  assert.equal(els.hubUrlInput.value, 'https://draft.example');
 });
 
 test('Hub Save compares Host Hub ports after canonicalizing numeric input', async () => {

@@ -8330,17 +8330,46 @@ const HUB_DRAFT_FIELDS = [
 const hubDraftDirty = Object.fromEntries(HUB_DRAFT_FIELDS.map(([field]) => [field, false]));
 const hubDraftRevisions = Object.fromEntries(HUB_DRAFT_FIELDS.map(([field]) => [field, 0]));
 let hubSaveBusy = false;
+let hubSaveInFlightRevisions = null;
+
+function hubDraftFieldIsActive(field) {
+  return field !== 'hubHostPort' || state.settings?.hubMode === 'host';
+}
+
+function syncHubDraftDirty(field) {
+  if (!hubDraftFieldIsActive(field)) {
+    hubDraftDirty[field] = false;
+    return;
+  }
+  const submittedRevision = hubSaveInFlightRevisions?.[field];
+  if (submittedRevision !== undefined && hubDraftRevisions[field] > submittedRevision) {
+    hubDraftDirty[field] = true;
+    return;
+  }
+  const inputId = HUB_DRAFT_FIELDS.find(([name]) => name === field)?.[1];
+  const input = inputId ? els[inputId] : null;
+  hubDraftDirty[field] = Boolean(input) && (
+    normalizeHubDraftValue(field, input.value) !== normalizeHubDraftValue(field, state.settings?.[field])
+  );
+}
+
+function reconcileHubDraftDirtyState() {
+  for (const [field] of HUB_DRAFT_FIELDS) {
+    if (hubDraftDirty[field]) syncHubDraftDirty(field);
+  }
+}
 
 function markHubDraftDirty(field) {
   const inputId = HUB_DRAFT_FIELDS.find(([name]) => name === field)?.[1];
   const input = inputId ? els[inputId] : null;
   if (!input) return;
   hubDraftRevisions[field] += 1;
-  hubDraftDirty[field] = true;
+  syncHubDraftDirty(field);
   syncHubSaveButton();
 }
 
 function syncHubDraftFields() {
+  reconcileHubDraftDirtyState();
   for (const [field, inputId] of HUB_DRAFT_FIELDS) {
     const input = els[inputId];
     if (!input || hubDraftDirty[field]) continue;
@@ -11052,12 +11081,15 @@ els.saveSettingsButton.addEventListener('click', async () => {
     const submittedHubRevisions = Object.fromEntries(
       Object.keys(submittedHubFields).map((field) => [field, hubDraftRevisions[field]])
     );
+    hubSaveInFlightRevisions = submittedHubRevisions;
     await saveSettings(patch);
     reconcileHubDraftsAfterSave(submittedHubFields, submittedHubRevisions);
     await refreshHubInfo();
     void refreshHubBuildStatus();
     await refreshStats();
   } finally {
+    hubSaveInFlightRevisions = null;
+    syncHubDraftFields();
     hubSaveBusy = false;
     syncHubSaveButton();
   }
