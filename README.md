@@ -20,10 +20,13 @@
 
 ## What this fork adds
 
-| Direction | What you see | How it works |
-| --- | --- | --- |
-| **CodexBar → Token Monitor** | Provider quota limits, labelled `límites y cuotas` in Spanish | Token Monitor reads the authenticated loopback `dashboard-v1` snapshot. The applications stay independent and are not merged; CodexBar remains the owner of provider-limit collection. |
-| **Token Monitor → CodexBar** | Today's tokens, this month's tokens and known cost, plus snapshot freshness | A local CodexBar plugin renders the three-row Token Monitor summary. The Spanish UI calls it a `resumen de uso`. |
+| In Token Monitor | In CodexBar |
+| --- | --- |
+| Provider quota limits collected by CodexBar, labelled `límites y cuotas` in Spanish. | Today's tokens, this month's tokens and known cost, plus snapshot freshness. |
+
+**CodexBar → Token Monitor.** Token Monitor reads provider quota limits (`cuotas` in Spanish) from the authenticated loopback `dashboard-v1` snapshot. The applications stay independent and are not merged; CodexBar remains the owner of provider-limit collection.
+
+**Token Monitor → CodexBar.** A local CodexBar plugin renders the three-row Token Monitor summary. The Spanish UI calls it a `resumen de uso`.
 
 The two integration directions are independent. They use separate endpoints, credentials and refresh cycles, and serving one endpoint never starts the opposite flow. The Spanish setup guide describes this as <span lang="es">dos flujos de integración independientes</span>.
 
