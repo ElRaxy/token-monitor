@@ -159,7 +159,7 @@ test('R21 hace un unico GET exacto y devuelve solo Hoy, Este mes y Actualizado',
   assert.match(month, /18[.,]4|18[.,]402[.,]110/i);
   assert.match(month, /token/i);
   assert.match(month, /42[.,]10|42[.,]1/);
-  assert.match(updated, /2026-08-26/);
+  assert.match(updated, /26\/08/);
   assert.match(updated, /08:29/);
   assert.match(updated, /UTC/i, 'last-good must expose the absolute observedAt timestamp');
   assert.match(updated, /8\s*s|2\s*(?:fuente|source)/i);

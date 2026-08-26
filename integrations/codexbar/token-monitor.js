@@ -55,51 +55,78 @@ function hasValidSummary(payload) {
   return hasValidPeriod(payload.periods.today) && hasValidPeriod(payload.periods.month);
 }
 
-function formatTokenCount(ctx, value) {
-  if (value >= 1000000) {
-    return `${ctx.format.number(value / 1000000, { maximumFractionDigits: 2 })} M tokens`;
+function formatDecimal(value, maximumFractionDigits, minimumFractionDigits = 0) {
+  const useExponential = Math.abs(value) >= 1000000000000000;
+  let formatted = useExponential
+    ? value.toExponential(maximumFractionDigits)
+    : value.toFixed(maximumFractionDigits);
+  if (maximumFractionDigits > minimumFractionDigits) {
+    const [mantissa, exponent] = formatted.split("e");
+    const [integer, fraction = ""] = mantissa.split(".");
+    const trimmed = fraction.replace(/0+$/, "");
+    const kept = trimmed.padEnd(minimumFractionDigits, "0");
+    const normalized = kept.length > 0 ? `${integer}.${kept}` : integer;
+    formatted = exponent === undefined ? normalized : `${normalized}e${exponent}`;
   }
-  if (value >= 1000) {
-    return `${ctx.format.number(value / 1000, { maximumFractionDigits: 1 })} k tokens`;
+  if (!useExponential) {
+    const [integer, fraction] = formatted.split(".");
+    const grouped = integer.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+    return fraction === undefined ? grouped : `${grouped},${fraction}`;
   }
-  return `${ctx.format.number(value)} tokens`;
+  return formatted.replace(".", ",");
 }
 
-function periodRow(ctx, label, period) {
+function formatTokenCount(value) {
+  if (value >= 999950) {
+    return `${formatDecimal(value / 1000000, 2)} M tokens`;
+  }
+  if (value >= 1000) {
+    return `${formatDecimal(value / 1000, 1)} k tokens`;
+  }
+  return `${value} tokens`;
+}
+
+function periodRow(label, period) {
   const row = {
     label,
-    value: formatTokenCount(ctx, period.totalTokens),
+    value: formatTokenCount(period.totalTokens),
   };
-  if (period.costUsd !== null) row.secondaryValue = ctx.format.usd(period.costUsd);
+  if (period.costUsd !== null) {
+    row.secondaryValue = `${formatDecimal(period.costUsd, 2, 2)} US$`;
+  }
   return row;
 }
 
-function absoluteUtcLabel(timestamp) {
-  return `${timestamp.slice(0, 19).replace("T", " ")} UTC`;
+function compactUtcLabel(timestamp) {
+  return `${timestamp.slice(8, 10)}/${timestamp.slice(5, 7)} · ${timestamp.slice(11, 16)} UTC`;
 }
 
-function freshnessRow(ctx, freshness) {
+function freshnessRow(freshness) {
   const sourceWord = freshness.sourceCount === 1 ? "fuente" : "fuentes";
-  const facts = [`${ctx.format.number(freshness.sourceCount)} ${sourceWord}`];
+  const facts = [`${freshness.sourceCount} ${sourceWord}`];
   if (freshness.staleSourceCount > 0) {
-    facts.push(`${ctx.format.number(freshness.staleSourceCount)} stale`);
+    facts.push(`${freshness.staleSourceCount} stale`);
   }
-  if (freshness.ageSeconds !== null) {
-    facts.unshift(`${ctx.format.number(freshness.ageSeconds)} s`);
+
+  if (freshness.observedAt === null) {
+    return {
+      label: "Actualizado",
+      value: "Sin observación",
+      secondaryValue: facts.join(" · "),
+    };
   }
+
   return {
     label: "Actualizado",
-    value: freshness.observedAt === null
-      ? "Sin marca temporal"
-      : absoluteUtcLabel(freshness.observedAt),
-    secondaryValue: facts.join(" · "),
+    value: `hace ${freshness.ageSeconds} s`,
+    secondaryValue: [compactUtcLabel(freshness.observedAt), ...facts].join(" · "),
   };
 }
 
 defineProvider({
   id: "token-monitor-bridge",
   name: "Token Monitor",
-  icon: { monogram: "TM", tint: "#22C55E" },
+  icon: { monogram: "TM", tint: "#167A3E" },
   endpoints: [{ setting: "BASE_URL", policy: "https-or-private-network-http" }],
   auth: { type: "bearer", secret: "SUMMARY_TOKEN" },
   capabilities: ["http-status"],
@@ -161,9 +188,9 @@ defineProvider({
     return {
       details: [{
         rows: [
-          periodRow(ctx, "Hoy", payload.periods.today),
-          periodRow(ctx, "Este mes", payload.periods.month),
-          freshnessRow(ctx, payload.freshness),
+          periodRow("Hoy", payload.periods.today),
+          periodRow("Este mes", payload.periods.month),
+          freshnessRow(payload.freshness),
         ],
       }],
     };

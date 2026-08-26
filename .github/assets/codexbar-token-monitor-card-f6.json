@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "codexbarVersion": "0.55.1",
+  "codexbarBuild": 130,
+  "pluginSha256": "c12fea7362535177ca3715c184dcea28fcf3223e6ae2df62a5eb82a031b0d332",
+  "installedCopyMatches": true,
+  "processCount": 1,
+  "capture": ".github/assets/codexbar-token-monitor-card.png",
+  "screenshotSha256": "a2f51a0dcf93eecb8b092776d8f81ba7f7af777041ddf383da958901aec19c8d",
+  "screenshotWidth": 620,
+  "screenshotHeight": 368,
+  "capturedAt": "2026-08-26T14:06:14Z",
+  "dataProfile": "public-safe synthetic sample",
+  "decision": "swift-renderer-required"
+}
