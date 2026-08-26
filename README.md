@@ -1,70 +1,94 @@
-<p align="right">
-   <strong>EN</strong> | <a href="./README.zh-CN.md">简</a> | <a href="./README.zh-TW.md">繁</a> | <a href="./README.ko.md">KO</a> | <a href="./README.ja.md">JA</a>
-</p>
 <div align="center">
-    <img src=".github/assets/app.png" alt="Token Monitor logo" width="120">
+    <img src=".github/assets/app.png" alt="Token Monitor" width="96">
     <h1>Token Monitor × CodexBar</h1>
-    <p><strong>Token truth and provider limits, together in the macOS menu bar.</strong></p>
+    <p><strong>Token usage in CodexBar. Provider limits in Token Monitor.</strong></p>
+    <p>Two local, opt-in bridges. Each app stays in charge of the data it collects.</p>
     <p>
-        <a href="https://github.com/ElRaxy/token-monitor"><img src="https://img.shields.io/badge/fork-ElRaxy%2Ftoken--monitor-22c55e?style=flat-square" alt="Public fork: ElRaxy/token-monitor"></a>
-        <img src="https://img.shields.io/badge/CodexBar-0.55.1%2B-0A84FF?style=flat-square" alt="CodexBar 0.55.1 or later">
+        <img src="https://img.shields.io/badge/community-fork-22c55e?style=flat-square" alt="Community fork">
+        <img src="https://img.shields.io/badge/tested-CodexBar%200.55.1-0A84FF?style=flat-square" alt="Tested with CodexBar 0.55.1">
+        <img src="https://img.shields.io/badge/integration-macOS%2014%2B-111827?style=flat-square&logo=apple&logoColor=white" alt="Integration requires macOS 14 or later">
         <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-A855F7?style=flat-square" alt="License: MIT"></a>
-        <img src="https://img.shields.io/badge/macOS-12%2B-111827?style=flat-square&logo=apple&logoColor=white" alt="macOS 12 or later">
+    </p>
+    <p>
+        <a href="#install-the-integration"><strong>Install</strong></a>
+        · <a href="#what-this-fork-adds">What this fork adds</a>
+        · <a href="docs/codexbar-plugin.md">Setup guide in Spanish</a>
     </p>
 </div>
 
+[ElRaxy/token-monitor](https://github.com/ElRaxy/token-monitor) is a community fork of Token Monitor. It adds a small bridge in each direction without combining the applications or their credentials.
+
+## What this fork adds
+
+| Direction | What you see | How it works |
+| --- | --- | --- |
+| **CodexBar → Token Monitor** | Provider quota limits, labelled `límites y cuotas` in Spanish | Token Monitor reads the authenticated loopback `dashboard-v1` snapshot. The applications stay independent and are not merged; CodexBar remains the owner of provider-limit collection. |
+| **Token Monitor → CodexBar** | Today's tokens, this month's tokens and known cost, plus snapshot freshness | A local CodexBar plugin renders the three-row Token Monitor summary. The Spanish UI calls it a `resumen de uso`. |
+
+The two integration directions are independent. They use separate endpoints, credentials and refresh cycles, and serving one endpoint never starts the opposite flow. The Spanish setup guide describes this as <span lang="es">dos flujos de integración independientes</span>.
+
+## Install the integration
+
+> [!IMPORTANT]
+> This fork currently runs from source. Official Token Monitor downloads do not include the CodexBar bridge, and this repository does not publish fork-specific binaries yet.
+
+### 1. Run this fork
+
+Requires Node.js 22.15 or later.
+
+```bash
+git clone https://github.com/ElRaxy/token-monitor.git
+cd token-monitor
+npm install
+npm start
+```
+
+### 2. Enable the summary
+
+In Token Monitor **Settings**, enable the CodexBar summary bridge and copy its dedicated token.
+
+### 3. Install the local provider
+
+Use CodexBar 0.55.1, the version covered by the integration gate. Open **Settings → Plugins → Install…** and select [`integrations/codexbar/token-monitor.js`](integrations/codexbar/token-monitor.js). The same file can be placed manually in `~/.config/codexbar/providers/`.
+
+Set `BASE_URL` to `http://127.0.0.1:17322`, save the copied token as the secure `SUMMARY_TOKEN`, approve that loopback origin and refresh CodexBar. The provider requests only `/api/integrations/codexbar/v1/summary`.
+
+[Read the complete setup, token rotation and troubleshooting guide](docs/codexbar-plugin.md).
+
+## Local by design
+
+- Both bridges use authenticated loopback transport. Invalid or partial configuration fails closed, and CodexBar-owned providers never fall back to duplicate native probes.
+- CodexBar receives only aggregate totals, known cost, source count and snapshot time. It does not receive prompts, responses, sessions, projects, models, file paths or Hub data.
+- The summary endpoint is cache-only. A read does not start collectors, provider probes, watchers or filesystem scans.
+- The two bridges use different bearer tokens. Neither token is written to URLs, command arguments, logs or the renderer.
+
+The full contract and threat model live in the [CodexBar plugin guide](docs/codexbar-plugin.md) and the [CodexBar `dashboard-v1` configuration](docs/configuration.md#codexbar-dashboard-v1-limits).
+
+<details>
+<summary><strong>Verified native card capture</strong></summary>
+
 ![Token Monitor summary inside CodexBar](.github/assets/codexbar-token-monitor-card.png)
 
-<sub>Public-safe sample data, rendered by the real CodexBar 0.55.1 native plugin card.</sub>
+<sub>This public-safe sample data capture records the first native CodexBar 0.55.1 gate. The current provider removes the redundant section heading and keeps the same three rows.</sub>
 
-[ElRaxy/token-monitor](https://github.com/ElRaxy/token-monitor) is a public, source-first community fork that connects two excellent independent projects without disguising one as the other. Token Monitor remains the multi-device usage ledger; CodexBar remains the native limits surface.
+</details>
 
-## One workflow, two directions
+## Token Monitor reference
 
-**CodexBar → Token Monitor.** The existing `dashboard-v1` flow lets Token Monitor present CodexBar provider quota limits (`límites y cuotas`). This direction remains independent and not merged into either repository, and CodexBar remains the owner of its native probes.
+Token Monitor is the local-first desktop widget underneath this fork. The base app tracks usage across 32+ AI coding tools, syncs several devices and keeps prompts, responses and source code on the machine. The upstream project maintains the [full product documentation and translated READMEs](https://github.com/Javis603/token-monitor#readme).
 
-**Token Monitor → CodexBar.** A community local provider built on CodexBar's official plugin API renders a minimal Token Monitor usage summary (`resumen de uso`) directly in CodexBar: tokens and known cost for **Hoy** and **Este mes**, plus an absolute **Actualizado** timestamp.
+Live token tracking covers Claude Code, Codex, Cursor, GitHub Copilot, Antigravity, OpenCode, and 26+ AI tools. Provider-limit checks cover Claude Code, Codex, Cursor, OpenRouter, third-party APIs, GLM, Kimi, and 21+ providers.
 
-These are two independent integration directions with separate endpoints, credentials and refresh cycles. In other words: dos flujos de integración independientes. Neither flow calls the other, so there is no semantic loop and each side can fail safely on its own.
+- **WSL usage (Windows)** reads file-backed usage from running distributions; SQLite-backed tools may need a [headless agent inside WSL](docs/wsl-sqlite-setup.md).
+- [Configuration reference](docs/configuration.md), including **AI Tool Limits (provider selection, limits, and credentials)**.
+- [API contract](docs/API.md) and [data export](docs/export.md).
 
-## Minimal by design
+<details>
+<summary><strong>Open the supported-tools matrix</strong></summary>
 
-The CodexBar card has only three factual rows: `Hoy`, `Este mes` and `Actualizado`. It deliberately shows no quota bars or percentages for aggregate token counts because there is no honest denominator. The provider uses CodexBar's official plugin sandbox, so no custom Swift build or unsigned replacement app is required.
+<br>
 
-Both integrations are opt-in: each uses authenticated loopback, fails closed, and never runs duplicate native probes, collectors or provider logins. Summary reads are cache-only.
-
-## Quick start
-
-1. Build and run this fork from source; fork-specific binaries are not published today.
-2. In Token Monitor **Settings**, enable the CodexBar summary bridge and copy its dedicated token.
-3. Install [`integrations/codexbar/token-monitor.js`](integrations/codexbar/token-monitor.js) with **CodexBar 0.55.1** or later from **Settings → Plugins → Install…**. You can also place it in `~/.config/codexbar/providers/`.
-4. Set `BASE_URL` to `http://127.0.0.1:17322`, save the copied bearer as the secure `SUMMARY_TOKEN`, and approve that exact loopback origin.
-
-CodexBar then requests only `/api/integrations/codexbar/v1/summary` with a 2-second timeout. The complete setup, rotation and error guide is in [Token Monitor inside CodexBar](docs/codexbar-plugin.md); configure the opposite direction in [CodexBar dashboard-v1 limits](docs/configuration.md#codexbar-dashboard-v1-limits).
-
-## Credits, licenses and release boundaries
-
-**Credits:** [Token Monitor](https://github.com/Javis603/token-monitor) was created by [Javis (`Javis603`)](https://github.com/Javis603); [CodexBar](https://github.com/steipete/CodexBar) was created by [Peter Steinberger (`steipete`)](https://github.com/steipete); this integration is maintained in the public fork by [Alex (`ElRaxy`)](https://github.com/ElRaxy). Both upstream projects use the MIT License. This fork retains Token Monitor's original [MIT license and notices](LICENSE) and links directly to [CodexBar's MIT License](https://github.com/steipete/CodexBar/blob/main/LICENSE). It is an independent community project: there is no upstream affiliation or endorsement (`no hay afiliación ni aval`).
-
-**Release boundaries:** [fork releases](https://github.com/ElRaxy/token-monitor/releases) are independent and separate from official upstream releases. The official [Token Monitor upstream releases](https://github.com/Javis603/token-monitor/releases) and official [CodexBar releases](https://github.com/steipete/CodexBar/releases) do not include this fork's CodexBar integration, and this repository does not currently publish fork-specific binaries. Use the official downloads for upstream software; build this fork from source for the integration.
-
----
-
-## Token Monitor foundation
-
-<p align="center">
-    <em>One live dashboard for every AI coding tool, synced across every machine.</em>
-</p>
-
-<div align="center">
-    <img src=".github/assets/demo.gif" alt="Token Monitor dashboard demo">
-</div>
-
-## What is Token Monitor?
-
-A desktop widget that shows live token usage and AI Tool Limits across 32+ AI coding tools — Claude Code, Codex, Cursor, GitHub Copilot, Cherry Studio, and more — with real-time multi-device sync, historical usage trends, and breakdowns by tool, device, model, session, or project.
-
-## Supported Tools
+## Supported tools
 
 Token Monitor supports token usage, account-limit checks, and session details separately:
 
@@ -121,219 +145,12 @@ Qoder CN token usage is read from the app's local SQLite database, not an API �
 This is an advanced local integration: reading needs a `sqlite3` CLI on PATH or a Node runtime with unflagged `node:sqlite` (Node ≥ 23.4; the Electron widget may need the CLI). Read failures are logged, and an existing complete snapshot is retained instead of being replaced with zero usage. Costs are estimated from the models.dev catalog for each mapped model; the adapter may break if Qoder changes its database schema.
 </details>
 
-## Showcase
-
-<table>
-<tr>
-<td width="290" align="center"><img src=".github/assets/home-view.png" width="250" alt="Home View"><br><sub>Customizable dashboard — choose which modules show and their order</sub></td>
-<td width="290" align="center"><img src=".github/assets/limits-view.png" width="250" alt="Limits View"><br><sub>Multiple accounts side by side, one-click switch of the active Codex account</sub></td>
-<td width="290" align="center"><img src=".github/assets/tools-view.png" width="250" alt="Tools View"><br><sub>Click any tool to expand input / output and cache-hit detail</sub></td>
-</tr>
-<tr>
-<td width="290" align="center"><img src=".github/assets/sessions-view.png" width="250" alt="Session View"><br><sub>Open a single session to break each prompt into tokens and tools used</sub></td>
-<td width="290" align="center"><img src=".github/assets/models-view.png" width="250" alt="Models View"><br><sub>Every model's usage and cost, aggregated across tools</sub></td>
-<td width="290" align="center"><img src=".github/assets/devices-view.png" width="250" alt="Devices View"><br><sub>Each device's usage, cost, and sync status — expand for per-machine detail</sub></td>
-</tr>
-</table>
-
-<table>
-<tr>
-<td width="435" align="center"><img src=".github/assets/dashboard-overview.png" width="400" alt="Usage Dashboard Overview"><br><sub>A year of activity heatmap and streaks, aggregated across all devices</sub></td>
-<td width="435" align="center"><img src=".github/assets/dashboard-trends.png" width="400" alt="Usage Dashboard Trends"><br><sub>A year of daily trends, stacked by tool / model, with K-line</sub></td>
-</tr>
-</table>
-
-## Why Token Monitor?
-
-Most usage monitors are useful on the machine they run on. Token Monitor is built for multi-device work: each device watches its own local logs, sends summary updates to your hub, and every connected widget sees token changes almost immediately.
-
-## Features
-
-### Tracking usage
-
-- **Live token tracking** — Claude Code, Codex, Cursor, GitHub Copilot, Antigravity, OpenCode, and 26+ AI tools, with the UI updating within seconds of each turn (full list in the table above)
-- **Per-session detail** — open a Claude Code, Codex, or OpenCode session to see tokens per prompt, expandable to each reply's exact token split and tools used (read on-demand from local transcripts or databases, never synced)
-- **Cache hit statistics** — click any tool or model to expand a detailed breakdown of input tokens (cache hit vs miss), output tokens, and hit-rate percentages
-- **Cost & currency** — cost alongside token counts, shown in USD, TWD, HKD, or CNY; exchange rates auto-update daily and can be manually overridden in Settings
-- **WSL usage (Windows)** — file-based usage from a running WSL distro is detected automatically and merged about every 5 minutes; SQLite-backed tools such as OpenCode and Hermes may require a [headless agent inside WSL](docs/wsl-sqlite-setup.md)
-
-### Limits, trends & export
-
-- **AI Tool Limits detection** — provider-specific session, weekly, billing, and credits windows for Claude Code, Codex, Cursor, OpenRouter, third-party APIs, GLM, Kimi, and 21+ providers, including multiple OpenRouter/third-party profiles and DeepSeek prepaid balance/spend
-- **Multiple accounts & Codex switching** — track several accounts per provider, each with its own limits; a tracked Codex account can be switched as the active local account in one click, without re-authenticating
-- **Preserve deleted session usage** — many tools prune old sessions (Claude Code drops transcripts after 30 days by default), losing that history. When enabled, Token Monitor archives observed daily tool/model usage locally so the heatmap and trends survive even after the source files are gone (see [Session data retention](#session-data-retention) below)
-- **Usage Trends & Dashboard** — a home-screen activity heatmap and trend chart, plus a dedicated dashboard window with streaks and stacked per-tool/per-model history (bar and K-line views) across all your devices
-- **Optional Status view** — Claude, OpenAI, Cursor, and DeepSeek status pages, with manual or interval re-checks
-- **Data export** — export usage as tool-agnostic CSV + JSON, manually or auto-written to a folder, for spreadsheets, Obsidian, Grafana, or scripts; see [docs/export.md](docs/export.md)
-- **Subscription records** — record by hand what each AI account actually costs; the plan label's tooltip then reports the price, the next renewal or end date, time subscribed, and the month's usage cost as a multiple of what the plan costs, for recurring plans and top-up ledgers alike
-
-### Multi-device & deployment
-
-- **Real-time multi-device sync** — Server-Sent Events push an update on one device to the others within seconds
-- **Local-first** — no servers needed for single-device use
-- **Self-hosted sync backend** — in-widget hub, Node CLI hub, or Cloudflare Worker
-- **iOS widget support** — Widgy and Scriptable through the Worker hub
-- **Privacy-first** — prompts, responses, source code, and file contents stay on your machine
-
-### Interface & surfaces
-
-- **Breakdown views** — grouped by tool, device, model, session, project, or account limits
-- **Menu bar (macOS) and system tray (Windows) popover** — live cost, tokens, or the closest-to-empty provider limit % next to the icon
-- **Floating Bubble mode** — collapses the widget into a draggable mini-window with click or hover preview and tray-style content
-- **Menu bar layout composer** — the menu bar and the floating bubble can use a built-in preset or a layout you build yourself: pick "Custom…" to add AI tool icons, quota bars, percentages, reset times, cost, or custom text, drag to reorder against a live preview, and give each item its own AI tool, account, quota window, and typeface
-- **Appearance controls** — interface theme switching (incl. a light mode), per-tool vendor colours, glass opacity, blur, and transparent window mode
-- **Experimental native macOS Widget** — macOS 14+ support in Small, Medium, and Large sizes, with Overview, Quota, Models, Activity, and Trend pages. This source-only preview is not yet promised in published releases.
-- **Customizable tool list** — hide, pin, and reorder tools in the main dashboard without changing what gets tracked
-- **Recordable global shortcut** — show or hide the window from anywhere
-- **Discord Rich Presence** — broadcast today's tokens, cost, and top client (opt-in)
-
-## Installation
-
-The downloads below are the official [Token Monitor upstream releases](https://github.com/Javis603/token-monitor/releases). They do not include this fork's CodexBar integration. To use the integration, [build this fork from source](#build-from-source); this repository does not currently publish fork-specific binaries.
-
-- **macOS (Apple Silicon)** — `.dmg`, signed and notarized
-- **macOS (Intel)** — x64 `.dmg`, signed and notarized
-- **Windows 10/11** — setup and portable `.exe`, [code-signed](docs/code-signing.md)
-- **Linux x64** — `.AppImage`
-
-Packaged builds check GitHub Releases automatically. When an update is available, the app shows an update indicator; supported platforms can also install from Settings → General.
-
-### First run
-
-Local mode is the default: launch the app and it starts tracking this device. No hub, agent, or config required.
-
-## Multi-device sync
-
-Pick ONE hub backend that all your devices (and any headless agents) connect to. On each device, open the widget and pick a mode under Settings → Multi-device Sync. The widget contributes this device's usage automatically; run `npm run agent` only on machines without a widget.
-
-#### Option A — Host the hub from the widget (easiest, no CLI)
-
-In the widget on one always-on machine, open Settings → Multi-device Sync and pick **Host hub on this device**. The widget generates a random secret and lists the LAN URLs other devices can connect to (Tailscale or ZeroTier addresses appear here too). On every other device, pick **Connect to a hub** and paste the URL + secret.
-
-The hub runs while Token Monitor is running — quitting (not just closing the window) stops it for all connected devices.
-
-#### Option B — Self-hosted Node hub (always-on headless machine)
-
-```bash
-# on the always-on machine
-cp .env.example .env
-# set TOKEN_MONITOR_SECRET to something private, then:
-npm run hub
-```
-
-#### Option C — Cloudflare Worker hub (across networks, including iPhone)
-
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Javis603/token-monitor/tree/main/worker)
-
-One-click deploy — Cloudflare will prompt for the `TOKEN_MONITOR_SECRET` during setup. Or deploy manually:
-
-```bash
-cd worker
-npm install
-npx wrangler login
-npx wrangler secret put TOKEN_MONITOR_SECRET
-npx wrangler deploy
-```
-
-Paste the deployed URL into each device's widget at Settings → Multi-device Sync. See [worker/README.md](worker/README.md) for the iOS widget recipe and endpoint reference, or [docs/API.md](docs/API.md) for the hub HTTP API.
-
-## App data
-
-App state lives in the OS user-data dir — delete it along with the app to fully uninstall.
-
-| Platform | Path |
-|----------|------|
-| macOS | `~/Library/Application Support/Token Monitor/` |
-| Windows | `%APPDATA%/Token Monitor/` |
-| Linux | `~/.config/Token Monitor/` |
-
-## Build from source
-
-To build your own installer, use Node.js 22.15+ on the **target** OS (electron-builder can't cross-build a macOS `.dmg` on Windows, or vice-versa).
-
-```bash
-npm install
-npm run dist:mac     # macOS arm64 .dmg           → dist/
-npm run dist:mac:x64 # macOS Intel x64 .dmg       → dist/
-npm run dist:win     # Windows x64 installer .exe → dist/
-npm run dist:linux   # Linux x64 AppImage         → dist/
-npm run pack         # unpacked app dir (no installer), for quick local testing
-```
-
-Output lands in `dist/`. Windows and Linux use the matching `dist:*` script above on the target OS. Packaging the macOS release build requires a local Developer ID Application signing identity; use `npm start` for local development or unsupported platforms.
-
-Runtime and packaging scripts explicitly ensure the pinned tokscale binary on the four vendored targets. Other source platforms keep the npm binary and filter clients it does not support; `npm install`, lint, and tests do not download it.
-
-## How it works
-
-```text
-Mode A — Local (default, no setup)
-    widget (Electron) ──▶ tokscale ──▶ ~/.claude, ~/.codex, $HERMES_HOME
-
-Mode B — Sync (opt-in, multi-device)
-    device A agent ──▶
-    device B agent ──▶  hub  ──▶  widget on any device
-    device C agent ──▶
-```
-
-The widget chooses local vs sync mode based on Settings → Multi-device Sync. The hub itself can run as a separate `npm run hub` process, a Cloudflare Worker, or directly inside one of the widgets (Host mode). In sync mode the hub pushes aggregated stats to every connected widget over Server-Sent Events, so updates on one device appear on the others within a few seconds.
-
-## Session data retention
-
-With **Preserve deleted session usage** enabled (Settings → Collection), Token Monitor archives observed daily tool/model usage locally with no time limit — so even after a source tool prunes its own sessions, the heatmap and trends are unaffected.
-
-<details>
-<summary><strong>Advanced: extend the source tool's own retention</strong></summary>
-
-<br>
-
-The heatmap and sync payload use a rolling 370-day window (older observations remain available locally for future views). **Claude Code keeps only 30 days of transcripts by default** (`cleanupPeriodDays`); to keep the full rolling year before the archive kicks in, raise it in `~/.claude/settings.json` before the window passes:
-
-```json
-{
-  "cleanupPeriodDays": 370
-}
-```
-
-A larger value keeps more, at the cost of transcripts living on disk for as long as you set. tokscale's [Session Data Retention](https://github.com/junhoyeo/tokscale#session-data-retention) table covers the other tools' defaults and config paths.
-
-This archive only covers days Token Monitor has already observed; data deleted before it started tracking cannot be recovered.
-
 </details>
 
-## Settings
+## Credits and release status
 
-There are two places to configure Token Monitor; day-to-day use only needs the first:
+**Credits and licenses.** [Token Monitor](https://github.com/Javis603/token-monitor) was created by [Javis (`Javis603`)](https://github.com/Javis603); [CodexBar](https://github.com/steipete/CodexBar) was created by [Peter Steinberger (`steipete`)](https://github.com/steipete); this integration is maintained by [Alex (`ElRaxy`)](https://github.com/ElRaxy). Both upstream projects use the MIT License. This fork retains Token Monitor's original [MIT license and notices](LICENSE) and links to [CodexBar's MIT License](https://github.com/steipete/CodexBar/blob/main/LICENSE). It is an independent community project. There is no endorsement and no upstream affiliation.
 
-- **Widget (GUI)** — click the `⚙` button in the bottom-right corner. Sections, in order: General (language, launch at login, updates), Main (Home modules and display currency), Window (window behavior, menu bar and floating-bubble layout, tray mode, shortcut), Appearance (theme and vendor colours), Collection (tracked tools, collection cadence, Preserve deleted session usage, data export), AI Tool Limits (provider selection, limits, and credentials), Subscriptions (what you pay per account), and Multi-device Sync. The `⇧` button in the title bar cycles the window behavior.
-- **Headless agent & hub** — no UI; configured with a `.env` file at the project root (copy from `.env.example`), precedence CLI flag → env var → built-in default.
+**Releases.** [Fork releases](https://github.com/ElRaxy/token-monitor/releases) are separate from official upstream releases. The official [Token Monitor releases](https://github.com/Javis603/token-monitor/releases) and [CodexBar releases](https://github.com/steipete/CodexBar/releases) do not include this fork's CodexBar integration, and this repository does not currently publish fork-specific binaries. Fork-built installers still inherit Token Monitor's upstream release metadata, so they are not an independent update channel.
 
-See the [configuration reference](docs/configuration.md) for every setting and all environment variables.
-
-## Privacy
-
-Token Monitor processes usage logs locally and sends no analytics or telemetry to the project maintainer. Network access occurs only for documented or user-enabled features. See the [privacy policy](docs/privacy.md) for the data used by updates, provider integrations, Discord Rich Presence, and optional multi-device sync.
-
-## Star History
-
-<a href="https://github.com/Javis603/token-monitor/tree/star-history">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Javis603/token-monitor/star-history/star-history-dark.svg" />
-   <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/Javis603/token-monitor/star-history/star-history.svg" />
-   <img alt="Star History Chart" src="https://raw.githubusercontent.com/Javis603/token-monitor/star-history/star-history.svg" />
- </picture>
-</a>
-
-## Contributing
-
-Issues and PRs are welcome. Project conventions, architecture notes, and the command reference live in [AGENTS.md](AGENTS.md) — written for coding agents, but it doubles as the contributor guide.
-
-## Acknowledgments
-
-- [tokscale](https://github.com/junhoyeo/tokscale) for log parsing and token accounting.
-- [CodexBar](https://github.com/steipete/CodexBar) for AI Tool Limits research.
-- [Code signing policy](docs/code-signing.md): Free code signing provided by [SignPath.io](https://signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
-
-## License
-
-[MIT](LICENSE) © [@Javis](https://github.com/Javis603)
+Contributions are welcome. Open changes against this fork for the integration, and use each upstream project's own repository for its core product.
