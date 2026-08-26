@@ -30,6 +30,7 @@ const fontSettingsApi = require('../shared/fontSettings');
 const motionPreferenceApi = require('./motionPreference');
 const { createClientSourceIpcHandlers } = require('./clientSourceIpc');
 const { createClaudeWebFetch } = require('./claudeWebFetch');
+const { createCodexBarSummaryServer } = require('./codexbarSummaryServer');
 const {
   createWorkbuddyLocalAuth,
   isSupportedWorkbuddyLocalAppPlatform
@@ -328,6 +329,10 @@ if (!app.isPackaged) loadDotEnv();
 const APP_NAME = 'Token Monitor';
 const APP_ICON_PATH = path.join(__dirname, '..', '..', 'assets', 'icon.png');
 const WINDOWS_APP_ICON_PATH = path.join(__dirname, '..', '..', 'assets', 'icon-win.png');
+const CODEXBAR_SUMMARY_HOST = '127.0.0.1';
+const CODEXBAR_SUMMARY_PORT = 17322;
+const CODEXBAR_SUMMARY_ROUTE = '/api/integrations/codexbar/v1/summary';
+const CODEXBAR_SUMMARY_ENDPOINT = `http://${CODEXBAR_SUMMARY_HOST}:${CODEXBAR_SUMMARY_PORT}${CODEXBAR_SUMMARY_ROUTE}`;
 
 // Electron's own documentation says a window given no icon falls back to the
 // executable's, and recommends ICO on Windows; electron-builder already
@@ -509,6 +514,8 @@ function defaultSettings() {
     codexbarDashboardUrl: DEFAULT_CODEXBAR_DASHBOARD_URL,
     codexbarDashboardToken: '',
     codexbarDelegatedProviders: [],
+    codexbarSummaryEnabled: false,
+    codexbarSummaryToken: '',
     showLimitSource: parseBoolean(process.env.TOKEN_MONITOR_SHOW_LIMIT_SOURCE, false),
     maskLimitAccountEmails: false,
     claudePrepaidBalanceEnabled: parseBoolean(process.env.TOKEN_MONITOR_CLAUDE_PREPAID_BALANCE, true),
@@ -2253,6 +2260,10 @@ function readSettings() {
     merged.currencyRates = normalizeCurrencyOverrides(merged.currencyRates);
     merged.hubHostPort = normalizeHubPort(merged.hubHostPort);
     merged.hubHostSecret = typeof merged.hubHostSecret === 'string' ? merged.hubHostSecret : '';
+    merged.codexbarSummaryEnabled = parseBoolean(merged.codexbarSummaryEnabled, false);
+    merged.codexbarSummaryToken = typeof merged.codexbarSummaryToken === 'string'
+      ? merged.codexbarSummaryToken
+      : '';
     delete merged.workbuddyEndpoint;
     merged.floatingBubbleEnabled = parseBoolean(merged.floatingBubbleEnabled ?? merged.edgeDrawerEnabled, false);
     merged.archivedClientUsage = normalizeArchivedClientUsage(merged.archivedClientUsage);
@@ -2551,6 +2562,15 @@ let latestHubStatsIdentity = null;
 let hubModeGeneration = 0;
 let tray = null;
 let latestStats = null;
+let codexbarSummaryBridge = null;
+let codexbarSummaryReconcileGeneration = 0;
+let codexbarSummaryReconcilePromise = Promise.resolve();
+let codexbarSummaryBridgeState = {
+  enabled: false,
+  configured: false,
+  status: 'disabled',
+  errorCode: null
+};
 let macWidgetSnapshotController = null;
 let macWidgetDemand = null;
 let macWidgetPublicationReady = false;
@@ -4505,6 +4525,144 @@ function codexbarDashboardStatus() {
   };
 }
 
+function generateCodexBarSummaryToken() {
+  return crypto.randomBytes(32).toString('base64url');
+}
+
+function codexbarSummaryBridgeErrorCode(error) {
+  if (error?.code === 'EADDRINUSE') return 'port-in-use';
+  if (error?.code === 'EACCES' || error?.code === 'EPERM') return 'permission-denied';
+  return 'bridge-unavailable';
+}
+
+async function stopCodexBarSummaryBridge(target = codexbarSummaryBridge) {
+  if (!target) return;
+  if (target === codexbarSummaryBridge) codexbarSummaryBridge = null;
+  try { await target.stop(); } catch (_) {}
+}
+
+function codexbarSummaryStatus() {
+  const allowedStates = new Set(['disabled', 'starting', 'active', 'error']);
+  const stateName = allowedStates.has(codexbarSummaryBridgeState.status)
+    ? codexbarSummaryBridgeState.status
+    : 'error';
+  const errorCode = /^[a-z][a-z0-9-]{0,47}$/.test(codexbarSummaryBridgeState.errorCode || '')
+    ? codexbarSummaryBridgeState.errorCode
+    : null;
+  return {
+    enabled: codexbarSummaryBridgeState.enabled === true,
+    configured: codexbarSummaryBridgeState.configured === true,
+    status: stateName,
+    endpoint: CODEXBAR_SUMMARY_ENDPOINT,
+    errorCode
+  };
+}
+
+function reconcileCodexBarSummaryBridge() {
+  const generation = ++codexbarSummaryReconcileGeneration;
+  const enabled = settings?.codexbarSummaryEnabled === true;
+  const token = typeof settings?.codexbarSummaryToken === 'string'
+    ? settings.codexbarSummaryToken.trim()
+    : '';
+  codexbarSummaryBridgeState = {
+    enabled,
+    configured: Boolean(token),
+    status: enabled ? 'starting' : 'disabled',
+    errorCode: null
+  };
+
+  const publishSettledStatus = () => {
+    const status = codexbarSummaryStatus();
+    if (generation === codexbarSummaryReconcileGeneration) pushSettingsToRenderer();
+    return status;
+  };
+
+  const apply = async () => {
+    if (generation !== codexbarSummaryReconcileGeneration) return codexbarSummaryStatus();
+    const previousBridge = codexbarSummaryBridge;
+    codexbarSummaryBridge = null;
+    await stopCodexBarSummaryBridge(previousBridge);
+    if (generation !== codexbarSummaryReconcileGeneration) return codexbarSummaryStatus();
+    if (!enabled) return publishSettledStatus();
+    if (!token) {
+      codexbarSummaryBridgeState = {
+        enabled: true,
+        configured: false,
+        status: 'error',
+        errorCode: 'token-unavailable'
+      };
+      return publishSettledStatus();
+    }
+
+    let candidate = null;
+    try {
+      candidate = createCodexBarSummaryServer({
+        host: CODEXBAR_SUMMARY_HOST,
+        port: CODEXBAR_SUMMARY_PORT,
+        token,
+        getStats: () => latestStats,
+        producerVersion: app.getVersion(),
+        logger: {
+          warn: () => console.warn('[codexbar-summary] Cached summary unavailable')
+        }
+      });
+      await candidate.start();
+      if (generation !== codexbarSummaryReconcileGeneration) {
+        await stopCodexBarSummaryBridge(candidate);
+        return codexbarSummaryStatus();
+      }
+      codexbarSummaryBridge = candidate;
+      codexbarSummaryBridgeState = {
+        enabled: true,
+        configured: true,
+        status: 'active',
+        errorCode: null
+      };
+    } catch (error) {
+      await stopCodexBarSummaryBridge(candidate);
+      if (generation === codexbarSummaryReconcileGeneration) {
+        codexbarSummaryBridgeState = {
+          enabled: true,
+          configured: Boolean(token),
+          status: 'error',
+          errorCode: codexbarSummaryBridgeErrorCode(error)
+        };
+      }
+    }
+    return publishSettledStatus();
+  };
+
+  codexbarSummaryReconcilePromise = codexbarSummaryReconcilePromise.then(apply, apply);
+  return codexbarSummaryReconcilePromise;
+}
+
+function copyCodexBarSummaryToken() {
+  const token = typeof settings?.codexbarSummaryToken === 'string'
+    ? settings.codexbarSummaryToken
+    : '';
+  if (!token) return false;
+  try {
+    clipboard.writeText(token);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function regenerateCodexBarSummaryToken() {
+  const previousToken = settings?.codexbarSummaryToken || '';
+  settings = { ...settings, codexbarSummaryToken: generateCodexBarSummaryToken() };
+  try {
+    saveSettings({ throwOnError: true });
+  } catch (error) {
+    settings = { ...settings, codexbarSummaryToken: previousToken };
+    throw error;
+  }
+  await reconcileCodexBarSummaryBridge();
+  pushSettingsToRenderer();
+  return codexbarSummaryStatus();
+}
+
 function settingsForRenderer() {
   const claudeWebCookieSource = settings?.claudeWebCookie
     ? 'settings'
@@ -4578,8 +4736,10 @@ function settingsForRenderer() {
     expose: ['hubHostSecret', 'secret']
   });
   delete redactedCredentials.codexbarDashboardToken;
+  delete redactedCredentials.codexbarSummaryToken;
   const rendererSettings = { ...settings };
   delete rendererSettings.codexbarDashboardToken;
+  delete rendererSettings.codexbarSummaryToken;
   for (const key of [
     'workbuddyAccessToken',
     'workbuddyUserId',
@@ -4660,6 +4820,8 @@ function settingsForRenderer() {
     codexbarDashboardProviderIds: CODEXBAR_DASHBOARD_PROVIDER_IDS,
     codexbarDashboardTokenConfigured: Boolean(settings?.codexbarDashboardToken),
     codexbarDashboardStatus: codexbarDashboardStatus(),
+    codexbarSummaryTokenConfigured: Boolean(settings?.codexbarSummaryToken),
+    codexbarSummaryStatus: codexbarSummaryStatus(),
     currencyRatesEffective: effectiveRates || resolveEffectiveRates(rateCache?.rates || {}, settings?.currencyRates || {}),
     currencyRateInfo: rateCache ? { source: rateCache.source, date: rateCache.date, fetchedAt: rateCache.fetchedAt } : null,
     windowToggleShortcutStatus: currentWindowToggleShortcutStatus()
@@ -5175,6 +5337,9 @@ function reconfigureUsageRuntimeForMode() {
 // stopLocalCollector() / stopSyncCollector() behaviour so the old watcher is
 // really gone before a new one starts on the same paths.
 function stopAll() {
+  codexbarSummaryReconcileGeneration += 1;
+  void stopCodexBarSummaryBridge(codexbarSummaryBridge);
+  codexbarSummaryBridge = null;
   stopPersistBoundsTimer();
   stopLocalCollector({ skipCloseWatchers: true });
   stopStatsStream();
@@ -6239,6 +6404,12 @@ app.whenReady().then(() => {
   configureWindowToggleShortcut();
   cleanupStaleStaging().catch((error) => console.log(`[tokscale] staging cleanup failed: ${error.message}`));
   ensureTray();
+  if (settings.codexbarSummaryEnabled && !settings.codexbarSummaryToken) {
+    const previousToken = settings.codexbarSummaryToken;
+    settings = { ...settings, codexbarSummaryToken: generateCodexBarSummaryToken() };
+    if (!saveSettings()) settings = { ...settings, codexbarSummaryToken: previousToken };
+  }
+  void reconcileCodexBarSummaryBridge();
   if (pendingMacWidgetOpen) setImmediate(openMainWindowFromWidget);
   if (settings.trayMode) enterTrayMode();
   regenerateTokscalePricing();
@@ -6260,6 +6431,9 @@ app.whenReady().then(() => {
   setTimeout(() => { checkTokscaleNpm({ silent: true }); }, 2000);
   ipcMain.handle('settings:get', () => settingsForRenderer());
   ipcMain.handle('codexbar:status', () => codexbarDashboardStatus());
+  ipcMain.handle('codexbarSummary:status', () => codexbarSummaryStatus());
+  ipcMain.handle('codexbarSummary:copyToken', () => copyCodexBarSummaryToken());
+  ipcMain.handle('codexbarSummary:regenerateToken', () => regenerateCodexBarSummaryToken());
 
   ipcMain.handle('subscriptions:adoptOrphans', async () => {
     try {
@@ -6341,6 +6515,9 @@ app.whenReady().then(() => {
     const normalizedPatch = { ...patch, currency: normalizedCurrency, ...codexbarConfig };
     delete normalizedPatch.codexbarDashboardProviderIds;
     delete normalizedPatch.codexbarDashboardTokenConfigured;
+    delete normalizedPatch.codexbarSummaryToken;
+    delete normalizedPatch.codexbarSummaryTokenConfigured;
+    delete normalizedPatch.codexbarSummaryStatus;
     delete normalizedPatch.windowMaximized;
     delete normalizedPatch.codexManagedAccounts;
     delete normalizedPatch.mimoManagedAccounts;
@@ -6473,6 +6650,11 @@ app.whenReady().then(() => {
       codexbarDashboardUrl: codexbarConfig.codexbarDashboardUrl,
       codexbarDashboardToken: codexbarConfig.codexbarDashboardToken,
       codexbarDelegatedProviders: codexbarConfig.codexbarDelegatedProviders,
+      codexbarSummaryEnabled: parseBoolean(
+        patch.codexbarSummaryEnabled ?? settings.codexbarSummaryEnabled,
+        false
+      ),
+      codexbarSummaryToken: settings.codexbarSummaryToken,
       showLimitSource: parseBoolean(patch.showLimitSource ?? settings.showLimitSource, false),
       maskLimitAccountEmails: parseBoolean(patch.maskLimitAccountEmails ?? settings.maskLimitAccountEmails, false),
       claudePrepaidBalanceEnabled: parseBoolean(patch.claudePrepaidBalanceEnabled ?? settings.claudePrepaidBalanceEnabled, true),
@@ -6521,6 +6703,9 @@ app.whenReady().then(() => {
         ? normalizeCustomPricingSetting(patch.customModelPricing)
         : normalizeCustomPricingSetting(settings.customModelPricing)
     }, normalizedPatch);
+    if (settings.codexbarSummaryEnabled && !settings.codexbarSummaryToken) {
+      settings.codexbarSummaryToken = generateCodexBarSummaryToken();
+    }
     settings.archivedClientUsage = normalizeArchivedClientUsage(settings.archivedClientUsage);
     if (settings.clients !== previousClients) updateArchivedClientUsage(previousClients, settings.clients);
     delete settings.edgeDrawerEnabled;
@@ -6529,6 +6714,12 @@ app.whenReady().then(() => {
     } catch (error) {
       settings = previousSettingsState;
       throw error;
+    }
+    if (
+      previousSettingsState.codexbarSummaryEnabled !== settings.codexbarSummaryEnabled
+      || previousSettingsState.codexbarSummaryToken !== settings.codexbarSummaryToken
+    ) {
+      void reconcileCodexBarSummaryBridge();
     }
     if (JSON.stringify(settings.customModelPricing || []) !== previousCustomModelPricing) {
       regenerateTokscalePricing();

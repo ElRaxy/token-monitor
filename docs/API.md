@@ -18,6 +18,39 @@ or:
 X-Token-Monitor-Secret: <secret>
 ```
 
+## Desktop loopback summary for CodexBar
+
+The Electron app can expose an independent, opt-in endpoint for a community provider running on CodexBar's official local-plugin system in version 0.55.1 or newer:
+
+```http
+GET http://127.0.0.1:17322/api/integrations/codexbar/v1/summary
+Authorization: Bearer <dedicated-summary-token>
+```
+
+This route is not part of the Hub API and does not accept `X-Token-Monitor-Secret`. Its bearer is generated independently and stored only in the desktop credential store. The server binds literally to `127.0.0.1`, accepts only the exact GET route, denies requests with an `Origin` header, emits no CORS headers, and reads only the latest in-memory stats snapshot.
+
+Successful responses use schema version 1 and an allowlisted shape:
+
+```json
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-26T08:00:00.000Z",
+  "producer": { "id": "token-monitor", "version": "1.0.0" },
+  "freshness": {
+    "observedAt": "2026-08-26T07:59:45.000Z",
+    "ageSeconds": 15,
+    "sourceCount": 2,
+    "staleSourceCount": 0
+  },
+  "periods": {
+    "today": { "totalTokens": 1250000, "costUsd": 3.41 },
+    "month": { "totalTokens": 18400000, "costUsd": 47.92 }
+  }
+}
+```
+
+`observedAt`, `ageSeconds`, each `costUsd`, and `producer.version` can be `null` when unknown. Token counts are non-negative safe integers. The endpoint returns bounded error codes only: `unauthorized` (401), `origin-not-allowed` (403), `not-found` (404), or `snapshot-unavailable` (503). It never returns identities, sessions, projects, provider credentials, raw provider bodies, quotas, or limit windows.
+
 ## `GET /api/health`
 
 Health check. Does not require authentication.

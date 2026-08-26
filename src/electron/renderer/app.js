@@ -395,6 +395,13 @@ Object.assign(els, {
   codexbarDashboardSaveButton: document.getElementById('codexbarDashboardSaveButton'),
   codexbarDashboardStatus: document.getElementById('codexbarDashboardStatus'),
   codexbarDashboardFeedback: document.getElementById('codexbarDashboardFeedback'),
+  codexbarSummarySettingsGroup: document.getElementById('codexbarSummarySettingsGroup'),
+  codexbarSummaryStatus: document.getElementById('codexbarSummaryStatus'),
+  codexbarSummaryEndpoint: document.getElementById('codexbarSummaryEndpoint'),
+  codexbarSummaryEnabledInput: document.getElementById('codexbarSummaryEnabledInput'),
+  codexbarSummaryCopyTokenButton: document.getElementById('codexbarSummaryCopyTokenButton'),
+  codexbarSummaryRegenerateTokenButton: document.getElementById('codexbarSummaryRegenerateTokenButton'),
+  codexbarSummaryFeedback: document.getElementById('codexbarSummaryFeedback'),
   sessionUsageArchiveInput: document.getElementById('sessionUsageArchiveInput'),
   sessionUsageArchiveStatus: document.getElementById('sessionUsageArchiveStatus'),
   reduceMotionInputs: Array.from(document.querySelectorAll('input[name="reduceMotionOption"]')),
@@ -5837,6 +5844,7 @@ function openSettingsPanel() {
   els.shell.classList.add('settings-open');
   els.shell.style.transform = 'translateZ(0)';
   void refreshCodexBarDashboardStatus();
+  void refreshCodexBarSummaryStatus();
   requestAnimationFrame(() => { els.shell.style.transform = ''; });
 }
 
@@ -8549,6 +8557,7 @@ function hydrateCodexBarDashboardProviderIds(settings) {
 }
 
 const CODEXBAR_FEEDBACK_MAX_LENGTH = 240;
+const CODEXBAR_SUMMARY_ENDPOINT = 'http://127.0.0.1:17322/api/integrations/codexbar/v1/summary';
 const CODEXBAR_STATUS_KEYS = {
   disabled: 'settings.codexbar.statusDisabled',
   configured: 'settings.codexbar.statusConfigured',
@@ -8556,6 +8565,12 @@ const CODEXBAR_STATUS_KEYS = {
   active: 'settings.codexbar.statusActive',
   degraded: 'settings.codexbar.statusDegraded',
   error: 'settings.codexbar.statusError'
+};
+const CODEXBAR_SUMMARY_STATUS_KEYS = {
+  disabled: 'settings.codexbar.summaryStatusDisabled',
+  starting: 'settings.codexbar.summaryStatusStarting',
+  active: 'settings.codexbar.summaryStatusActive',
+  error: 'settings.codexbar.summaryStatusError'
 };
 const CODEXBAR_DIAGNOSTIC_CODES = new Set([
   'aborted', 'ambiguous-alias', 'incompatible-schema', 'invalid-json', 'invalid-payload',
@@ -8650,6 +8665,63 @@ function saveCodexBarSettings() {
   })();
 }
 
+let codexbarSummaryStatusRefreshPromise = null;
+
+function setCodexBarSummaryFeedback(message, isError = false) {
+  if (!els.codexbarSummaryFeedback) return;
+  els.codexbarSummaryFeedback.textContent = String(message || '').slice(0, CODEXBAR_FEEDBACK_MAX_LENGTH);
+  els.codexbarSummaryFeedback.classList.toggle('error', isError);
+}
+
+function syncCodexBarSummaryStatus() {
+  if (!els.codexbarSummaryStatus) return;
+  const summaryStatus = state.settings?.codexbarSummaryStatus || {};
+  const status = CODEXBAR_SUMMARY_STATUS_KEYS[summaryStatus.status]
+    ? summaryStatus.status
+    : 'disabled';
+  const configured = Boolean(state.settings?.codexbarSummaryTokenConfigured);
+  const parts = [t(CODEXBAR_SUMMARY_STATUS_KEYS[status])];
+  parts.push(t(configured
+    ? 'settings.codexbar.summaryTokenReady'
+    : 'settings.codexbar.summaryTokenMissing'));
+  els.codexbarSummaryStatus.textContent = parts.join(' · ');
+  els.codexbarSummaryStatus.classList.toggle('error', status === 'error');
+  els.codexbarSummaryEndpoint.textContent = CODEXBAR_SUMMARY_ENDPOINT;
+  els.codexbarSummaryEnabledInput.checked = Boolean(state.settings?.codexbarSummaryEnabled);
+  els.codexbarSummaryCopyTokenButton.disabled = !configured;
+  els.codexbarSummaryRegenerateTokenButton.disabled = !state.settings?.codexbarSummaryEnabled;
+}
+
+async function refreshCodexBarSummaryStatus() {
+  if (codexbarSummaryStatusRefreshPromise) return codexbarSummaryStatusRefreshPromise.catch(() => null);
+  const settingsPushRevisionAtRequest = state.settingsPushRevision;
+  codexbarSummaryStatusRefreshPromise = (async () => {
+    const status = await window.tokenMonitor.getCodexBarSummaryStatus();
+    if (state.settingsPushRevision !== settingsPushRevisionAtRequest) {
+      return state.settings?.codexbarSummaryStatus || status;
+    }
+    state.settings = {
+      ...state.settings,
+      codexbarSummaryStatus: status,
+      codexbarSummaryTokenConfigured: status?.configured === true
+    };
+    syncCodexBarSummaryStatus();
+    return status;
+  })();
+  try {
+    return await codexbarSummaryStatusRefreshPromise;
+  } catch (_) {
+    return null;
+  } finally {
+    codexbarSummaryStatusRefreshPromise = null;
+  }
+}
+
+function syncCodexBarSummarySettingsForm() {
+  if (!els.codexbarSummaryEnabledInput) return;
+  syncCodexBarSummaryStatus();
+}
+
 function syncSettingsForm() {
   applySettingsTranslations();
   applyInitialBreakdownPreference();
@@ -8671,6 +8743,7 @@ function syncSettingsForm() {
   els.showLimitSourceInput.checked = Boolean(state.settings.showLimitSource);
   els.maskLimitAccountEmailsInput.checked = Boolean(state.settings.maskLimitAccountEmails);
   syncCodexBarSettingsForm();
+  syncCodexBarSummarySettingsForm();
   renderSubscriptionSettings();
   const showLimitUsed = state.settings.showLimitUsed ? 'used' : 'remaining';
   for (const input of els.showLimitUsedInputs || []) input.checked = input.value === showLimitUsed;
@@ -11286,6 +11359,7 @@ els.settingsButton.addEventListener('click', (event) => {
   const settingsOpen = !els.settingsPanel.classList.contains('hidden');
   if (!settingsOpen) stopWindowShortcutRecording();
   if (settingsOpen) void refreshCodexBarDashboardStatus();
+  if (settingsOpen) void refreshCodexBarSummaryStatus();
   els.shell.classList.toggle('settings-open', settingsOpen);
   if (!settingsOpen && event.detail > 0) els.settingsButton.blur();
   els.shell.style.transform = 'translateZ(0)';
@@ -11420,6 +11494,43 @@ els.codexbarDashboardSaveButton?.addEventListener('click', () => {
   void saveCodexBarSettings().catch(() => {
     console.warn('CodexBar settings save failed.');
   });
+});
+els.codexbarSummaryEnabledInput?.addEventListener('change', async () => {
+  try {
+    const enabled = els.codexbarSummaryEnabledInput.checked;
+    await saveSettings({ codexbarSummaryEnabled: enabled });
+    await refreshCodexBarSummaryStatus();
+    setCodexBarSummaryFeedback(t(enabled
+      ? 'settings.codexbar.summaryEnabledFeedback'
+      : 'settings.codexbar.summaryDisabledFeedback'));
+  } catch (_) {
+    syncCodexBarSummarySettingsForm();
+    setCodexBarSummaryFeedback(t('settings.codexbar.summarySaveError'), true);
+  }
+});
+els.codexbarSummaryCopyTokenButton?.addEventListener('click', async () => {
+  try {
+    const copied = await window.tokenMonitor.copyCodexBarSummaryToken();
+    setCodexBarSummaryFeedback(t(copied
+      ? 'settings.codexbar.summaryCopied'
+      : 'settings.codexbar.summaryCopyError'), !copied);
+  } catch (_) {
+    setCodexBarSummaryFeedback(t('settings.codexbar.summaryCopyError'), true);
+  }
+});
+els.codexbarSummaryRegenerateTokenButton?.addEventListener('click', async () => {
+  try {
+    const status = await window.tokenMonitor.regenerateCodexBarSummaryToken();
+    state.settings = {
+      ...state.settings,
+      codexbarSummaryStatus: status,
+      codexbarSummaryTokenConfigured: status?.configured === true
+    };
+    syncCodexBarSummarySettingsForm();
+    setCodexBarSummaryFeedback(t('settings.codexbar.summaryRegenerated'));
+  } catch (_) {
+    setCodexBarSummaryFeedback(t('settings.codexbar.summaryRegenerateError'), true);
+  }
 });
 els.subscriptionAddToggle?.addEventListener('click', () => {
   const opening = els.subscriptionAddDetails?.classList.contains('hidden');

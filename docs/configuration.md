@@ -90,6 +90,14 @@ Canonical delegated provider IDs are `claude`, `codex`, `opencode`, `cursor`, `a
 
 `codexbar dashboard` is a one-shot diagnostic command, not a poller, and must never be placed in Token Monitor's refresh loop. Keep `codexbar serve` running for normal collection.
 
+### Token Monitor summary inside CodexBar
+
+The reverse integration is desktop-only, opt-in, and disabled by default. In Token Monitor settings, enable **Token Monitor → CodexBar**, copy the dedicated token, and install [`integrations/codexbar/token-monitor.js`](../integrations/codexbar/token-monitor.js) as a local provider in CodexBar 0.55.1 or newer. The complete setup is in [CodexBar plugin setup](codexbar-plugin.md).
+
+Token Monitor then listens on the fixed loopback endpoint `http://127.0.0.1:17322/api/integrations/codexbar/v1/summary`. It serves only the cached Today/Month token totals, known costs, producer version, and factual source freshness. A request never starts collectors, probes, watchers, Hub traffic, or filesystem scans.
+
+This direction has its own random bearer in the private credential store. It is not the Hub secret and is not the dashboard-v1 token. CodexBar 0.55.1 requires the plugin's `https-or-private-network-http` policy and a typed approval for authenticated local HTTP. Missing or invalid auth returns `401`; browser-origin requests return `403`; any other route or method returns `404`; and an empty cache returns `503`. The endpoint sends no CORS headers and is stopped when the toggle is disabled or Token Monitor exits.
+
 One-shot run (collect once and exit — useful for cron / launchd):
 
 ```bash

@@ -3,32 +3,61 @@
 </p>
 <div align="center">
     <img src=".github/assets/app.png" alt="Token Monitor logo" width="120">
-    <h1>Token Monitor</h1>
+    <h1>Token Monitor × CodexBar</h1>
+    <p><strong>Token truth and provider limits, together in the macOS menu bar.</strong></p>
+    <p>
+        <a href="https://github.com/ElRaxy/token-monitor"><img src="https://img.shields.io/badge/fork-ElRaxy%2Ftoken--monitor-22c55e?style=flat-square" alt="Public fork: ElRaxy/token-monitor"></a>
+        <img src="https://img.shields.io/badge/CodexBar-0.55.1%2B-0A84FF?style=flat-square" alt="CodexBar 0.55.1 or later">
+        <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-A855F7?style=flat-square" alt="License: MIT"></a>
+        <img src="https://img.shields.io/badge/macOS-12%2B-111827?style=flat-square&logo=apple&logoColor=white" alt="macOS 12 or later">
+    </p>
 </div>
+
+![Token Monitor summary inside CodexBar](.github/assets/codexbar-token-monitor-card.png)
+
+<sub>Public-safe sample data, rendered by the real CodexBar 0.55.1 native plugin card.</sub>
+
+[ElRaxy/token-monitor](https://github.com/ElRaxy/token-monitor) is a public, source-first community fork that connects two excellent independent projects without disguising one as the other. Token Monitor remains the multi-device usage ledger; CodexBar remains the native limits surface.
+
+## One workflow, two directions
+
+**CodexBar → Token Monitor.** The existing `dashboard-v1` flow lets Token Monitor present CodexBar provider quota limits (`límites y cuotas`). This direction remains independent and not merged into either repository, and CodexBar remains the owner of its native probes.
+
+**Token Monitor → CodexBar.** A community local provider built on CodexBar's official plugin API renders a minimal Token Monitor usage summary (`resumen de uso`) directly in CodexBar: tokens and known cost for **Hoy** and **Este mes**, plus an absolute **Actualizado** timestamp.
+
+These are two independent integration directions with separate endpoints, credentials and refresh cycles. In other words: dos flujos de integración independientes. Neither flow calls the other, so there is no semantic loop and each side can fail safely on its own.
+
+## Minimal by design
+
+The CodexBar card has only three factual rows: `Hoy`, `Este mes` and `Actualizado`. It deliberately shows no quota bars or percentages for aggregate token counts because there is no honest denominator. The provider uses CodexBar's official plugin sandbox, so no custom Swift build or unsigned replacement app is required.
+
+Both integrations are opt-in: each uses authenticated loopback, fails closed, and never runs duplicate native probes, collectors or provider logins. Summary reads are cache-only.
+
+## Quick start
+
+1. Build and run this fork from source; fork-specific binaries are not published today.
+2. In Token Monitor **Settings**, enable the CodexBar summary bridge and copy its dedicated token.
+3. Install [`integrations/codexbar/token-monitor.js`](integrations/codexbar/token-monitor.js) with **CodexBar 0.55.1** or later from **Settings → Plugins → Install…**. You can also place it in `~/.config/codexbar/providers/`.
+4. Set `BASE_URL` to `http://127.0.0.1:17322`, save the copied bearer as the secure `SUMMARY_TOKEN`, and approve that exact loopback origin.
+
+CodexBar then requests only `/api/integrations/codexbar/v1/summary` with a 2-second timeout. The complete setup, rotation and error guide is in [Token Monitor inside CodexBar](docs/codexbar-plugin.md); configure the opposite direction in [CodexBar dashboard-v1 limits](docs/configuration.md#codexbar-dashboard-v1-limits).
+
+## Credits, licenses and release boundaries
+
+**Credits:** [Token Monitor](https://github.com/Javis603/token-monitor) was created by [Javis (`Javis603`)](https://github.com/Javis603); [CodexBar](https://github.com/steipete/CodexBar) was created by [Peter Steinberger (`steipete`)](https://github.com/steipete); this integration is maintained in the public fork by [Alex (`ElRaxy`)](https://github.com/ElRaxy). Both upstream projects use the MIT License. This fork retains Token Monitor's original [MIT license and notices](LICENSE) and links directly to [CodexBar's MIT License](https://github.com/steipete/CodexBar/blob/main/LICENSE). It is an independent community project: there is no upstream affiliation or endorsement (`no hay afiliación ni aval`).
+
+**Release boundaries:** [fork releases](https://github.com/ElRaxy/token-monitor/releases) are independent and separate from official upstream releases. The official [Token Monitor upstream releases](https://github.com/Javis603/token-monitor/releases) and official [CodexBar releases](https://github.com/steipete/CodexBar/releases) do not include this fork's CodexBar integration, and this repository does not currently publish fork-specific binaries. Use the official downloads for upstream software; build this fork from source for the integration.
+
+---
+
+## Token Monitor foundation
 
 <p align="center">
     <em>One live dashboard for every AI coding tool, synced across every machine.</em>
 </p>
 
-> [!NOTE]
-> **Community integration fork.** [`ElRaxy/token-monitor`](https://github.com/ElRaxy/token-monitor) adds an optional, read-only integration with [CodexBar](https://github.com/steipete/CodexBar) through its public `dashboard-v1` API. The projects remain independent: their repositories, runtimes, credentials, and update channels are not merged.
->
-> The integration is disabled by default, accepts only authenticated HTTP loopback endpoints, and fails closed without silently running duplicate native probes. See [CodexBar dashboard-v1 limits](docs/configuration.md#codexbar-dashboard-v1-limits) for setup and security details.
->
-> **Credits:** Token Monitor was created by [Javis (`Javis603`)](https://github.com/Javis603); CodexBar was created by [Peter Steinberger (`steipete`)](https://github.com/steipete). This integration is maintained by [Alex (`ElRaxy`)](https://github.com/ElRaxy). Both upstream projects use the MIT License; this fork retains Token Monitor's original [license and notices](LICENSE), links to [CodexBar's upstream license](https://github.com/steipete/CodexBar/blob/main/LICENSE), and is an independent community project, with no upstream affiliation or endorsement implied.
-
-<p align="center">
-    <a href="https://github.com/Javis603/token-monitor/releases"><img src="https://img.shields.io/github/v/release/Javis603/token-monitor?include_prereleases&style=flat-square&label=release&color=22c55e" alt="Latest release" /></a>
-    <a href="https://github.com/Javis603/token-monitor/releases"><img src="https://img.shields.io/github/downloads/Javis603/token-monitor/total?style=flat-square&color=22c55e" alt="Total downloads" /></a>
-    <img src="https://img.shields.io/badge/Windows-10%2B-0078D4?style=flat-square" alt="Windows 10 or later" />
-    <img src="https://img.shields.io/badge/macOS-12%2B-0A84FF?style=flat-square&logo=apple&logoColor=white" alt="macOS 12 or later" />
-    <img src="https://img.shields.io/badge/Linux-x64-64748b?style=flat-square&logo=linux&logoColor=white" alt="Linux x64" />
-    <a href="https://discord.gg/HmdNVVvw5P"><img src="https://img.shields.io/discord/1344259784219689031?color=5865F2&label=Discord&logo=discord&logoColor=white&style=flat-square" alt="Discord"></a>
-    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-A855F7?style=flat-square" alt="License: MIT" /></a>
-</p>
-
 <div align="center">
-    <img src=".github/assets/demo.gif">
+    <img src=".github/assets/demo.gif" alt="Token Monitor dashboard demo">
 </div>
 
 ## What is Token Monitor?

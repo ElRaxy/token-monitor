@@ -606,7 +606,8 @@
               </div>
             </div>
             <div id="codexbarSettingsGroup" class="settings-subgroup">
-              <div class="settings-group-header"><span data-i18n="settings.codexbar.title">CodexBar Dashboard</span></div>
+              <div class="settings-group-header"><span data-i18n="settings.codexbar.title">CodexBar</span></div>
+              <p class="settings-note" data-i18n="settings.codexbar.dashboardDirection">CodexBar → Token Monitor · quota limits</p>
               <p id="codexbarDashboardStatus" class="settings-note" role="status" aria-live="polite"></p>
               <label class="checkbox-label settings-item"><span class="settings-item-text"><span class="settings-item-title" data-i18n="settings.codexbar.enabled">Enable CodexBar</span></span><input id="codexbarDashboardEnabledInput" type="checkbox" /></label>
               <label class="settings-field" for="codexbarDashboardUrlInput"><span data-i18n="settings.codexbar.url">Dashboard URL</span>
@@ -623,6 +624,21 @@
                 <button id="codexbarDashboardSaveButton" type="button" data-i18n="settings.codexbar.save">Save CodexBar settings</button>
               </div>
               <p id="codexbarDashboardFeedback" class="settings-note" role="status" aria-live="polite"></p>
+              <div id="codexbarSummarySettingsGroup" class="settings-group">
+                <div class="settings-group-header"><span data-i18n="settings.codexbar.summaryTitle">Token Monitor → CodexBar</span></div>
+                <p class="settings-note" data-i18n="settings.codexbar.summaryDescription">Share cached token totals and cost with the local CodexBar plugin.</p>
+                <p id="codexbarSummaryStatus" class="settings-note" role="status" aria-live="polite"></p>
+                <label class="checkbox-label settings-item"><span class="settings-item-text"><span class="settings-item-title" data-i18n="settings.codexbar.summaryEnabled">Show Token Monitor in CodexBar</span></span><input id="codexbarSummaryEnabledInput" type="checkbox" /></label>
+                <div class="settings-field">
+                  <span data-i18n="settings.codexbar.summaryEndpoint">Local endpoint</span>
+                  <code id="codexbarSummaryEndpoint">http://127.0.0.1:17322/api/integrations/codexbar/v1/summary</code>
+                </div>
+                <div class="settings-actions">
+                  <button id="codexbarSummaryCopyTokenButton" type="button" data-i18n="settings.codexbar.summaryCopyToken">Copy token</button>
+                  <button id="codexbarSummaryRegenerateTokenButton" type="button" data-i18n="settings.codexbar.summaryRegenerateToken">Regenerate</button>
+                </div>
+                <p id="codexbarSummaryFeedback" class="settings-note" role="status" aria-live="polite"></p>
+              </div>
             </div>
           </div>
         </div>
