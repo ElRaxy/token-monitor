@@ -160,7 +160,6 @@ defineProvider({
     const payload = response.json;
     return {
       details: [{
-        title: "Resumen de uso",
         rows: [
           periodRow(ctx, "Hoy", payload.periods.today),
           periodRow(ctx, "Este mes", payload.periods.month),

@@ -140,7 +140,13 @@ test('R21 hace un unico GET exacto y devuelve solo Hoy, Este mes y Actualizado',
     options: { timeoutSeconds: 2 }
   }]);
   assert.deepEqual(Object.keys(snapshot), ['details'], 'summary must not masquerade as a quota or cost window');
-  assert.ok(Array.isArray(snapshot.details) && snapshot.details.length > 0);
+  assert.ok(Array.isArray(snapshot.details));
+  assert.equal(snapshot.details.length, 1);
+  assert.equal(
+    Object.hasOwn(snapshot.details[0], 'title'),
+    false,
+    'compact summary must not repeat the redundant Resumen de uso title'
+  );
   const rows = snapshot.details.flatMap((section) => section.rows || []);
   assert.deepEqual(rows.map((row) => row.label), ['Hoy', 'Este mes', 'Actualizado']);
 
