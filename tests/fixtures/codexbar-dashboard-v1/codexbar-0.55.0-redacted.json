@@ -1,0 +1,143 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-25T08:00:00Z",
+  "staleAfterSeconds": 180,
+  "host": {
+    "codexBarVersion": "0.55.0",
+    "refreshIntervalSeconds": 60
+  },
+  "fixtureExtension": {
+    "purpose": "synthetic redacted dashboard-v1 contract"
+  },
+  "providers": [
+    {
+      "id": "codex",
+      "name": "Codex",
+      "enabled": true,
+      "source": "oauth",
+      "status": {
+        "level": "ok",
+        "label": "Operational",
+        "updatedAt": "2026-08-25T07:59:00Z"
+      },
+      "identity": {
+        "accountEmail": "redacted@example.invalid",
+        "plan": "Synthetic plan"
+      },
+      "windows": [
+        {
+          "kind": "session",
+          "label": "Session",
+          "usedPercent": 25,
+          "remainingPercent": 75,
+          "resetAt": "2026-08-25T13:00:00Z"
+        }
+      ],
+      "accounts": [
+        {
+          "id": "fixture-account:1",
+          "label": "redacted@example.invalid",
+          "active": true,
+          "identity": {
+            "accountEmail": "redacted@example.invalid",
+            "plan": null
+          },
+          "windows": [
+            {
+              "kind": "session",
+              "label": "Account session",
+              "usedPercent": 10,
+              "remainingPercent": 90,
+              "resetAt": "2026-08-25T13:00:00Z"
+            }
+          ],
+          "pace": null,
+          "error": null,
+          "updatedAt": "2026-08-25T07:59:45Z"
+        }
+      ],
+      "credits": {
+        "remaining": 42,
+        "unit": "credits"
+      },
+      "cost": {
+        "todayUSD": 1.25,
+        "last30DaysUSD": 12.5
+      },
+      "tokens": 123456,
+      "sessions": [
+        {
+          "id": "synthetic-session"
+        }
+      ],
+      "display": {
+        "accentColor": "#49A3B0",
+        "sortKey": 0,
+        "priority": "normal"
+      },
+      "providerExtension": "ignored",
+      "error": null,
+      "updatedAt": "2026-08-25T07:59:45Z"
+    },
+    {
+      "id": "claude",
+      "name": "Claude",
+      "enabled": true,
+      "source": "cli",
+      "status": {
+        "level": "ok",
+        "label": "Operational",
+        "updatedAt": "2026-08-25T07:58:00Z"
+      },
+      "identity": null,
+      "windows": [
+        {
+          "kind": "weekly",
+          "label": "Weekly",
+          "usedPercent": 40,
+          "remainingPercent": 60,
+          "resetAt": "2026-08-29T08:00:00Z"
+        }
+      ],
+      "cost": {
+        "todayUSD": 2.5,
+        "last30DaysUSD": 25
+      },
+      "display": {
+        "accentColor": "#D97757",
+        "sortKey": 1,
+        "priority": "normal"
+      },
+      "error": null,
+      "updatedAt": "2026-08-25T07:58:30Z"
+    },
+    {
+      "id": "doubao",
+      "name": "Doubao",
+      "enabled": true,
+      "source": "api",
+      "status": {
+        "level": "ok",
+        "label": "Operational",
+        "updatedAt": "2026-08-25T07:57:00Z"
+      },
+      "identity": null,
+      "windows": [
+        {
+          "kind": "billing",
+          "label": "Coding plan",
+          "usedPercent": 35,
+          "remainingPercent": 65,
+          "resetAt": "2026-09-01T00:00:00Z"
+        }
+      ],
+      "display": {
+        "accentColor": "#006EFF",
+        "sortKey": 2,
+        "priority": "normal"
+      },
+      "error": null,
+      "updatedAt": "2026-08-25T07:57:30Z"
+    }
+  ]
+}

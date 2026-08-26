@@ -12,6 +12,13 @@ function readRendererFile(name) {
   return fs.readFileSync(path.join(rendererDir, name), 'utf8');
 }
 
+function htmlTagWithId(source, id) {
+  const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const tag = source.match(new RegExp(`<[^>]+\\bid="${escaped}"[^>]*>`))?.[0] || '';
+  assert.ok(tag, `${id} control should exist`);
+  return tag;
+}
+
 function cssRule(source, selector) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const match = source.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
@@ -1709,6 +1716,74 @@ test('remote Hub build status is wired as a separate localized sync hint', () =>
   assert.equal([...i18n.matchAll(/'settings\.sync\.hubBuild\.current':/g)].length, 5);
   assert.equal([...i18n.matchAll(/'settings\.sync\.hubBuild\.updateAvailable':/g)].length, 5);
   assert.equal([...i18n.matchAll(/'settings\.sync\.hubBuild\.legacy':/g)].length, 0);
+});
+
+test('CodexBar settings are canonical controls inside AI Tool Limits', () => {
+  const html = readRendererFile('index.html');
+  const app = readRendererFile('app.js');
+  const i18n = readRendererFile('i18n.js');
+  const limitsStart = html.indexOf('id="limitsSettingsDetails"');
+  const accountsStart = html.indexOf('id="accountsSettingsDetails"', limitsStart);
+  assert.notEqual(limitsStart, -1, 'AI Tool Limits details should exist');
+  assert.notEqual(accountsStart, -1, 'account settings should follow AI Tool Limits');
+  const limitsControls = html.slice(limitsStart, accountsStart);
+
+  assert.match(limitsControls, /id="codexbarSettingsGroup"/);
+  assert.match(htmlTagWithId(limitsControls, 'codexbarDashboardEnabledInput'), /type="checkbox"/);
+  assert.match(htmlTagWithId(limitsControls, 'codexbarDashboardUrlInput'), /type="url"/);
+  assert.match(limitsControls, /id="codexbarDelegatedProviderCheckboxes"/);
+  const tokenInput = htmlTagWithId(limitsControls, 'codexbarDashboardTokenInput');
+  assert.match(tokenInput, /type="password"/);
+  assert.match(tokenInput, /autocomplete="off"/);
+  assert.doesNotMatch(tokenInput, /\svalue\s*=/);
+  assert.match(htmlTagWithId(limitsControls, 'codexbarDashboardSaveButton'), /type="button"/);
+
+  const providerRenderer = runRendererFunctions(
+    app,
+    ['renderCodexBarDelegatedProviders'],
+    'renderCodexBarDelegatedProviders.toString()'
+  );
+  assert.match(providerRenderer, /LIMIT_PROVIDERS/);
+  assert.match(providerRenderer, /dataset\.provider\s*=\s*id/);
+  assert.doesNotMatch(providerRenderer, /doubao/);
+
+  for (const key of ['title', 'enabled', 'url', 'providers', 'token', 'save']) {
+    assert.equal(
+      [...i18n.matchAll(new RegExp(`'settings\\.codexbar\\.${key}':`, 'g'))].length,
+      5,
+      `settings.codexbar.${key} should exist in all five catalogues`
+    );
+  }
+});
+
+test('CodexBar renderer keeps the bearer transient and saves one atomic patch', () => {
+  const app = readRendererFile('app.js');
+  const main = fs.readFileSync(path.join(rendererDir, '..', 'main.js'), 'utf8');
+  const syncSource = runRendererFunctions(
+    app,
+    ['syncCodexBarSettingsForm'],
+    'syncCodexBarSettingsForm.toString()'
+  );
+  const saveSource = runRendererFunctions(
+    app,
+    ['saveCodexBarSettings'],
+    'saveCodexBarSettings.toString()'
+  );
+
+  assert.match(syncSource, /codexbarDashboardTokenConfigured/);
+  assert.doesNotMatch(app, /state\.settings\?*\.codexbarDashboardToken\b/);
+  assert.match(saveSource, /codexbarDashboardEnabled/);
+  assert.match(saveSource, /codexbarDashboardUrl/);
+  assert.match(saveSource, /codexbarDelegatedProviders/);
+  assert.match(saveSource, /codexbarDashboardToken/);
+  assert.equal((saveSource.match(/saveSettings\(/g) || []).length, 1);
+  assert.match(saveSource, /saveSettings\(patch\)/);
+  assert.match(saveSource, /finally\s*\{[\s\S]*codexbarDashboardTokenInput\.value\s*=\s*''/);
+
+  const settingsForRenderer = functionBody(main, 'settingsForRenderer', 'systemDarkTrayUi');
+  assert.match(settingsForRenderer, /delete rendererSettings\.codexbarDashboardToken/);
+  assert.match(settingsForRenderer, /codexbarDashboardTokenConfigured:\s*Boolean\(/);
+  assert.doesNotMatch(settingsForRenderer, /expose:\s*\[[^\]]*codexbarDashboardToken/);
 });
 
 test('main settings normalize collection cadence and replace only usage when it changes', () => {

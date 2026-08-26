@@ -1553,3 +1553,48 @@ test('aggregateLimits never labels a merged OpenCode row Web while a local windo
   assert.equal(provider.windows.length, 2);
   assert.equal(provider.source, 'local');
 });
+
+test('R5 excluye uso coste e identidad no estable', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { parseCodexBarDashboardSnapshot } = require('../../src/shared/codexbarDashboard');
+  const payload = JSON.parse(fs.readFileSync(path.join(
+    __dirname,
+    '..',
+    'fixtures',
+    'codexbar-dashboard-v1',
+    'codexbar-0.55.0-redacted.json'
+  ), 'utf8'));
+  const parsed = parseCodexBarDashboardSnapshot(payload, {
+    nowMs: Date.parse('2026-08-25T08:01:00.000Z'),
+    refreshMs: 90_000
+  });
+  const projected = parsed.limits.providers.find((provider) => provider.provider === 'codex');
+  const normalized = normalizeLimitProvider(projected);
+
+  assert.equal(normalized.accountKey, '');
+  assert.equal(normalized.accountEmail, '');
+  assert.equal(normalized.accountName, '');
+  assert.equal(normalized.accountLabel, '');
+  assert.equal(normalized.planLabel, '');
+  const sessionWindow = normalized.windows.find((window) => window.kind === 'session');
+  assert.ok(sessionWindow);
+  assert.equal(sessionWindow.remainingPercent, 75);
+  assert.deepEqual({
+    producer: normalized.producer,
+    producerVersion: normalized.producerVersion,
+    producedAt: normalized.producedAt,
+    staleAfterMs: normalized.staleAfterMs
+  }, {
+    producer: 'codexbar',
+    producerVersion: '0.55.0',
+    producedAt: '2026-08-25T08:00:00.000Z',
+    staleAfterMs: 180_000
+  });
+  for (const excluded of ['accounts', 'cost', 'credits', 'display', 'identity', 'sessions', 'tokens']) {
+    assert.equal(Object.hasOwn(normalized, excluded), false, `${excluded} must not cross the limits wire`);
+  }
+  const serialized = JSON.stringify(normalized);
+  assert.doesNotMatch(serialized, /redacted@example\.invalid|synthetic-session/);
+  assert.doesNotMatch(serialized, /"todayUSD":1\.25|"last30DaysUSD":12\.5|123456/);
+});

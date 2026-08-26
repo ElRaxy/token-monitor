@@ -398,6 +398,23 @@ function normalizeOpenCodeAccountKeyAliases(values, accountKey = '') {
     .slice(0, MAX_OPENCODE_ACCOUNT_KEY_ALIASES);
 }
 
+function normalizeCodexBarProvenance(input) {
+  if (String(input?.producer || '').trim().toLowerCase() !== 'codexbar') return {};
+  const version = String(input.producerVersion || '').trim();
+  const producerVersion = /^[a-z0-9][a-z0-9.+_-]{0,63}$/i.test(version) ? version : '';
+  const producedAt = normalizeIsoTimestamp(input.producedAt);
+  const staleAfterMsValue = numberOrNull(input.staleAfterMs);
+  const staleAfterMs = staleAfterMsValue !== null && staleAfterMsValue > 0
+    ? staleAfterMsValue
+    : null;
+  return {
+    producer: 'codexbar',
+    ...(producerVersion ? { producerVersion } : {}),
+    ...(producedAt ? { producedAt } : {}),
+    ...(staleAfterMs ? { staleAfterMs } : {})
+  };
+}
+
 function normalizeLimitProvider(input) {
   if (!input || typeof input !== 'object') return null;
   const provider = normalizeProviderId(input.provider);
@@ -456,6 +473,7 @@ function normalizeLimitProvider(input) {
     status: normalizeStatus(input.status),
     source: normalizeSource(input.source),
     sourceDetail: normalizeSourceDetail(input.sourceDetail ?? input.source_detail),
+    ...normalizeCodexBarProvenance(input),
     updatedAt: normalizeIsoTimestamp(input.updatedAt) || normalizeIsoTimestamp(input.checkedAt),
     windows,
     balanceUsd: numberOrNull(input.balanceUsd),

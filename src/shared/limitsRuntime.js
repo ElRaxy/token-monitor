@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { fetchCodexBarDashboard } = require('./codexbarDashboard');
 const {
   PROVIDER_CLEANUP_GRACE_MS,
   normalizeLimitsRefreshMode,
@@ -33,6 +34,7 @@ const {
 } = require('./limitsRetryPolicy');
 
 const DEFAULT_LIMITS_MAX_CONCURRENCY = 3;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 const TRANSIENT_STATUSES = new Set([
   'timeout',
@@ -40,6 +42,23 @@ const TRANSIENT_STATUSES = new Set([
   'sourceRateLimited',
   'unavailable',
   'error'
+]);
+
+const SAFE_CODEXBAR_ERROR_CODES = new Set([
+  'aborted',
+  'ambiguous-alias',
+  'incompatible-schema',
+  'invalid-json',
+  'invalid-payload',
+  'ownership-mismatch',
+  'payload-too-large',
+  'stale',
+  'timeout',
+  'unauthorized',
+  'unavailable',
+  'unknown-provider',
+  'unknown-window',
+  'unsafe-url'
 ]);
 
 const COOLDOWN_BYPASS_REASONS = new Set([
@@ -73,6 +92,136 @@ function clean(value) {
 
 function providerId(value) {
   return clean(value).toLowerCase();
+}
+
+function parseCodexBarDelegatedProviders(value) {
+  if (value === undefined || value === null || value === '') return new Set();
+  const raw = Array.isArray(value) ? value : String(value).split(',');
+  return new Set(raw.map(providerId).filter(Boolean));
+}
+
+function codexBarOwnershipState(value = {}) {
+  return {
+    enabled: parseBoolean(value.codexbarDashboardEnabled, false),
+    baseUrl: clean(value.codexbarDashboardUrl),
+    token: clean(value.codexbarDashboardToken),
+    providers: parseCodexBarDelegatedProviders(value.codexbarDelegatedProviders)
+  };
+}
+
+function sameProviderSet(left, right) {
+  if (left.size !== right.size) return false;
+  for (const provider of left) {
+    if (!right.has(provider)) return false;
+  }
+  return true;
+}
+
+function codexBarConfigChanged(previous, next) {
+  if (previous.enabled !== next.enabled || !sameProviderSet(previous.providers, next.providers)) {
+    return true;
+  }
+  if (!previous.enabled && !next.enabled) return false;
+  return previous.baseUrl !== next.baseUrl || previous.token !== next.token;
+}
+
+function codexBarOwnedProviders(state) {
+  return state.enabled ? state.providers : new Set();
+}
+
+function withCodexBarOwnership(value, ownership) {
+  return {
+    ...cloneValue(value),
+    codexbarDashboardEnabled: ownership.enabled,
+    codexbarDashboardUrl: ownership.baseUrl,
+    codexbarDashboardToken: ownership.token,
+    codexbarDelegatedProviders: [...ownership.providers]
+  };
+}
+
+function codexBarOwnershipMismatch(value, ownership) {
+  if (!value || typeof value !== 'object') return false;
+  const resolved = codexBarOwnershipState(value);
+  return (
+    (Object.hasOwn(value, 'codexbarDashboardEnabled') && resolved.enabled !== ownership.enabled)
+    || (Object.hasOwn(value, 'codexbarDashboardUrl') && resolved.baseUrl !== ownership.baseUrl)
+    || (Object.hasOwn(value, 'codexbarDashboardToken') && resolved.token !== ownership.token)
+    || (
+      Object.hasOwn(value, 'codexbarDelegatedProviders')
+      && !sameProviderSet(resolved.providers, ownership.providers)
+    )
+  );
+}
+
+function ownershipMismatchError() {
+  return { code: 'ownership-mismatch', status: 'unavailable' };
+}
+
+function withoutCodexBarToken(value) {
+  const copy = cloneValue(value);
+  delete copy.codexbarDashboardToken;
+  return copy;
+}
+
+function codexBarLastGoodIsFresh(row, nowMs) {
+  if (row?.producer !== 'codexbar') return true;
+  const producedAtMs = Date.parse(row.producedAt);
+  const staleAfterMs = Number(row.staleAfterMs);
+  return Number.isFinite(producedAtMs)
+    && Number.isFinite(staleAfterMs)
+    && staleAfterMs > 0
+    && nowMs <= producedAtMs + staleAfterMs;
+}
+
+function safeCodexBarErrorCode(error) {
+  const code = clean(error?.code).toLowerCase();
+  if (code === 'probe_timeout' || clean(error?.status).toLowerCase() === 'timeout') return 'timeout';
+  return SAFE_CODEXBAR_ERROR_CODES.has(code) ? code : '';
+}
+
+function codexBarErrorStatus(error) {
+  const code = safeCodexBarErrorCode(error);
+  if (code === 'unauthorized') return 'unauthorized';
+  if (code === 'timeout') return 'timeout';
+  return 'unavailable';
+}
+
+function safeCodexBarFailure(error) {
+  const code = safeCodexBarErrorCode(error) || 'unavailable';
+  return { code, status: codexBarErrorStatus({ code }) };
+}
+
+function dashboardAbortError(reason) {
+  const message = reason instanceof Error ? reason.message : String(reason || 'CodexBar request aborted');
+  const error = new Error(message);
+  error.name = 'AbortError';
+  error.code = 'aborted';
+  error.status = 'unavailable';
+  return error;
+}
+
+function signalAbortError(signal) {
+  return signal?.reason instanceof Error ? signal.reason : dashboardAbortError(signal?.reason);
+}
+
+function raceWithAbort(promise, signal) {
+  if (!signal) return Promise.resolve(promise);
+  if (signal.aborted) return Promise.reject(signalAbortError(signal));
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      callback(value);
+    };
+    const onAbort = () => finish(reject, signalAbortError(signal));
+    signal.addEventListener('abort', onAbort, { once: true });
+    Promise.resolve(promise).then(
+      (value) => finish(resolve, value),
+      (error) => finish(reject, error)
+    );
+  });
 }
 
 function privateCredentialDigest(provider, value) {
@@ -174,6 +323,7 @@ function createLimitsRuntime(initialOptions = {}, deps = {}) {
   const providerRuntimeState = deps.providerRuntimeState instanceof Map
     ? deps.providerRuntimeState
     : new Map();
+  const fetchDashboard = deps.fetchCodexBarDashboard || fetchCodexBarDashboard;
 
   let config = cloneValue(initialOptions);
   let enabled = parseBoolean(config.limitsEnabled ?? config.enabled, true);
@@ -195,14 +345,122 @@ function createLimitsRuntime(initialOptions = {}, deps = {}) {
   let intervalTimer = null;
   let resetTimer = null;
   let urgencyTimer = null;
+  let dashboardExpiryTimer = null;
   let lastScheduledFullAt = 0;
+  let dashboardGeneration = 1;
+  let nextDashboardBatchId = 1;
   const burnState = createLimitsBurnState();
   const listeners = new Set();
   const lanes = new Map();
+  const dashboardBatches = new Set();
   const providerQueue = [];
   const queuedProviders = new Set();
   const attemptedResetBoundaries = new Set();
   let snapshot = normalizeLimitsSummary({ updatedAt: null, refreshMs, providers: [] });
+
+  function createDashboardBatch() {
+    return {
+      id: nextDashboardBatchId++,
+      generation: dashboardGeneration,
+      consumers: 0,
+      tracked: false,
+      invalidated: false,
+      settled: false,
+      baseUrl: '',
+      token: '',
+      controller: null,
+      promise: null
+    };
+  }
+
+  function retainDashboardBatch(batch) {
+    batch.consumers += 1;
+    if (batch.tracked) return;
+    batch.tracked = true;
+    dashboardBatches.add(batch);
+  }
+
+  function releaseDashboardBatch(batch) {
+    if (!batch) return;
+    batch.consumers = Math.max(0, batch.consumers - 1);
+    if (batch.consumers > 0) return;
+    if (batch.tracked) dashboardBatches.delete(batch);
+    batch.tracked = false;
+    if (!batch.settled && batch.controller && !batch.controller.signal.aborted) {
+      batch.controller.abort(dashboardAbortError('CodexBar batch has no consumers'));
+    }
+  }
+
+  function invalidateDashboardBatches(reason) {
+    dashboardGeneration += 1;
+    for (const batch of dashboardBatches) {
+      batch.invalidated = true;
+      batch.tracked = false;
+      if (batch.controller && !batch.controller.signal.aborted) {
+        batch.controller.abort(dashboardAbortError(reason));
+      }
+    }
+    dashboardBatches.clear();
+  }
+
+  function sharedDashboardSnapshot(ownership, batch) {
+    if (!batch || batch.invalidated || batch.generation !== dashboardGeneration) {
+      return Promise.reject(dashboardAbortError('CodexBar batch superseded'));
+    }
+    if (batch.promise) {
+      if (batch.baseUrl !== ownership.baseUrl || batch.token !== ownership.token) {
+        return Promise.reject(dashboardAbortError('CodexBar batch configuration changed'));
+      }
+      return batch.promise;
+    }
+    const controller = new AbortController();
+    batch.baseUrl = ownership.baseUrl;
+    batch.token = ownership.token;
+    batch.controller = controller;
+    const fetchOptions = {
+      baseUrl: ownership.baseUrl,
+      token: ownership.token,
+      signal: controller.signal,
+      nowMs: now(),
+      refreshMs,
+      ...(typeof deps.codexbarFetch === 'function' ? { fetchImpl: deps.codexbarFetch } : {})
+    };
+    const raw = Promise.resolve().then(() => fetchDashboard(fetchOptions));
+    batch.promise = raceWithAbort(raw, controller.signal).then(
+      (result) => {
+        batch.settled = true;
+        return result;
+      },
+      (error) => {
+        batch.settled = true;
+        throw error;
+      }
+    );
+    return batch.promise;
+  }
+
+  function dashboardUnavailableRow(provider, meta = {}) {
+    return {
+      provider,
+      status: 'unavailable',
+      source: '',
+      updatedAt: meta.generatedAt || new Date(now()).toISOString(),
+      windows: [],
+      producer: 'codexbar',
+      ...(meta.producerVersion ? { producerVersion: meta.producerVersion } : {}),
+      ...(meta.generatedAt ? { producedAt: meta.generatedAt } : {}),
+      ...(Number(meta.staleAfterMs) > 0 ? { staleAfterMs: Number(meta.staleAfterMs) } : {})
+    };
+  }
+
+  async function probeCodexBarProvider(provider, ownership, signal, batch) {
+    if (signal?.aborted) throw signalAbortError(signal);
+    const shared = sharedDashboardSnapshot(ownership, batch);
+    const result = await raceWithAbort(shared, signal);
+    const rows = Array.isArray(result?.limits?.providers) ? result.limits.providers : [];
+    const matching = rows.filter((row) => providerId(row?.provider) === provider);
+    return matching.length > 0 ? matching : [dashboardUnavailableRow(provider, result?.meta)];
+  }
 
   function laneFor(provider) {
     if (!lanes.has(provider)) {
@@ -225,7 +483,18 @@ function createLimitsRuntime(initialOptions = {}, deps = {}) {
   function finishIntent(intent, result) {
     if (!intent || intent.settled) return;
     intent.settled = true;
+    if (intent.dashboardBatchRetained) {
+      intent.dashboardBatchRetained = false;
+      releaseDashboardBatch(intent.dashboardBatch);
+    }
     intent.resolve(result);
+  }
+
+  function setDashboardBatchRetained(intent, retained) {
+    if (!intent || intent.dashboardBatchRetained === retained) return;
+    intent.dashboardBatchRetained = retained;
+    if (retained) retainDashboardBatch(intent.dashboardBatch);
+    else releaseDashboardBatch(intent.dashboardBatch);
   }
 
   function emitEvent(type, provider, detail = {}) {
@@ -316,16 +585,37 @@ function createLimitsRuntime(initialOptions = {}, deps = {}) {
     for (const state of lane.identities.values()) {
       const attempt = state.lastAttempt;
       if (!attempt) continue;
-      const status = publicAttemptStatus(attempt.status);
-      const row = state.lastGood
-        ? normalizeLimitProvider({ ...state.lastGood, status })
-        : normalizeLimitProvider({
-            ...(attempt.row || {}),
+      const codexBarExpired = state.lastGood?.producer === 'codexbar'
+        && !codexBarLastGoodIsFresh(state.lastGood, now());
+      const status = codexBarExpired ? 'unavailable' : publicAttemptStatus(attempt.status);
+      const expiredProvenance = codexBarExpired ? {
+        producer: 'codexbar',
+        ...(state.lastGood.producerVersion
+          ? { producerVersion: state.lastGood.producerVersion }
+          : {}),
+        ...(state.lastGood.producedAt ? { producedAt: state.lastGood.producedAt } : {}),
+        ...(Number(state.lastGood.staleAfterMs) > 0
+          ? { staleAfterMs: Number(state.lastGood.staleAfterMs) }
+          : {})
+      } : {};
+      const row = codexBarExpired
+        ? normalizeLimitProvider({
             provider,
+            source: state.lastGood.source || '',
             status,
             updatedAt: attempt.at,
-            windows: []
-          });
+            windows: [],
+            ...expiredProvenance
+          })
+        : state.lastGood
+          ? normalizeLimitProvider({ ...state.lastGood, status })
+          : normalizeLimitProvider({
+              ...(attempt.row || {}),
+              provider,
+              status,
+              updatedAt: attempt.at,
+              windows: []
+            });
       if (row) rows.push(row);
     }
     return rows;
@@ -352,10 +642,48 @@ function createLimitsRuntime(initialOptions = {}, deps = {}) {
     }
     scheduleResetTimer();
     scheduleUrgencyTimer();
+    scheduleDashboardExpiryTimer();
     const published = cloneValue(snapshot);
     deps.onUpdate?.(published);
     for (const listener of listeners) listener(published);
     return published;
+  }
+
+  function clearDashboardExpiryTimer() {
+    if (dashboardExpiryTimer !== null) clearTimer(dashboardExpiryTimer);
+    dashboardExpiryTimer = null;
+  }
+
+  function scheduleDashboardExpiryTimer() {
+    clearDashboardExpiryTimer();
+    if (stopped || !enabled) return;
+    const nowMs = now();
+    let nearestExpiry = Number.POSITIVE_INFINITY;
+    for (const provider of configuredProviders) {
+      const lane = lanes.get(provider);
+      if (!lane) continue;
+      for (const state of lane.identities.values()) {
+        const row = state.lastGood;
+        if (row?.producer !== 'codexbar') continue;
+        const producedAtMs = Date.parse(row.producedAt);
+        const staleAfterMs = Number(row.staleAfterMs);
+        if (!Number.isFinite(producedAtMs) || !Number.isFinite(staleAfterMs) || staleAfterMs <= 0) {
+          continue;
+        }
+        const expiresAt = producedAtMs + staleAfterMs;
+        if (expiresAt >= nowMs) nearestExpiry = Math.min(nearestExpiry, expiresAt);
+      }
+    }
+    if (!Number.isFinite(nearestExpiry)) return;
+    const delayMs = Math.min(
+      MAX_TIMER_DELAY_MS,
+      Math.max(1, nearestExpiry - nowMs + 1)
+    );
+    dashboardExpiryTimer = setTimer(() => {
+      dashboardExpiryTimer = null;
+      if (stopped || !enabled) return;
+      rebuildSnapshot();
+    }, delayMs);
   }
 
   function scheduleResetTimer() {
@@ -508,7 +836,7 @@ function createLimitsRuntime(initialOptions = {}, deps = {}) {
     return (lane.accountRevisions.get(identityKey) || 0) === (dispatch.accountRevisions.get(identityKey) || 0);
   }
 
-  function applyAttempt(lane, identityKey, row, status, at) {
+  function applyAttempt(lane, identityKey, row, status, at, code = '') {
     const existing = lane.identities.get(identityKey) || {
       identityKey,
       lastGood: null,
@@ -519,7 +847,12 @@ function createLimitsRuntime(initialOptions = {}, deps = {}) {
     } else if (!TRANSIENT_STATUSES.has(status)) {
       existing.lastGood = null;
     }
-    existing.lastAttempt = { status, at, row };
+    existing.lastAttempt = {
+      status,
+      at,
+      row,
+      ...(code ? { code } : {})
+    };
     lane.identities.set(identityKey, existing);
   }
 
@@ -535,6 +868,7 @@ function createLimitsRuntime(initialOptions = {}, deps = {}) {
 
   function commitRows(lane, dispatch, rawRows, attemptError = null) {
     if (stopped || runtimeEpoch !== dispatch.runtimeEpoch || !enabled || !configuredProviders.has(lane.provider)) return false;
+    if (dispatch.owner === 'codexbar' && dashboardGeneration !== dispatch.ownershipGeneration) return false;
     if (lane.epoch !== dispatch.providerEpoch) return false;
     if (dispatch.accountScoped) {
       const currentRevision = lane.accountRevisions.get(dispatch.identityKey) || 0;
@@ -549,13 +883,21 @@ function createLimitsRuntime(initialOptions = {}, deps = {}) {
     const represented = new Set();
 
     if (attemptError) {
-      const status = attemptError.status || (attemptError.code === 'PROBE_TIMEOUT' ? 'timeout' : 'unavailable');
+      const codexBarCode = dispatch.owner === 'codexbar'
+        ? safeCodexBarErrorCode(attemptError)
+        : '';
+      const status = dispatch.owner === 'codexbar'
+        ? codexBarErrorStatus(attemptError)
+        : attemptError.status || (attemptError.code === 'PROBE_TIMEOUT' ? 'timeout' : 'unavailable');
       const targets = dispatch.accountScoped
         ? [dispatch.identityKey]
         : expected.size ? [...expected] : [`${lane.provider}:*`];
       for (const identityKey of targets) {
         if (!accountRevisionStillCurrent(lane, identityKey, dispatch)) continue;
-        applyAttempt(lane, identityKey, { provider: lane.provider }, status, attemptAt);
+        applyAttempt(lane, identityKey, {
+          provider: lane.provider,
+          ...(dispatch.owner === 'codexbar' ? { producer: 'codexbar' } : {})
+        }, status, attemptAt, codexBarCode);
       }
       rebuildSnapshot();
       return true;
@@ -604,37 +946,67 @@ function createLimitsRuntime(initialOptions = {}, deps = {}) {
     const dispatch = {
       runtimeEpoch,
       providerEpoch: lane.epoch,
+      ownershipGeneration: intent.ownershipGeneration,
       accountScoped: intent.accountScoped,
       identityKey: intent.identityKey,
       accountRevision: lane.accountRevisions.get(intent.identityKey) || 0,
       accountRevisions: new Map(lane.accountRevisions),
-      expectedIdentityKeys: [...lane.identities.keys()]
+      expectedIdentityKeys: [...lane.identities.keys()],
+      owner: intent.owner
     };
+    setDashboardBatchRetained(intent, intent.owner === 'codexbar');
     lane.active = { intent, controller, dispatch };
     emitEvent('probe-start', lane.provider, { reason: intent.reason });
     let reportedRetryAfterMs = null;
     try {
+      const resolverBaseConfig = withCodexBarOwnership(config, intent.ownership);
       const resolved = deps.resolveConfigSnapshot
-        ? await deps.resolveConfigSnapshot(cloneValue(intent.scope), cloneValue(config))
-        : config;
-      const configSnapshot = cloneValue(resolved || config);
+        ? await deps.resolveConfigSnapshot(cloneValue(intent.scope), cloneValue(resolverBaseConfig))
+        : resolverBaseConfig;
+      if (
+        stopped
+        || runtimeEpoch !== dispatch.runtimeEpoch
+        || (dispatch.owner === 'codexbar' && dashboardGeneration !== dispatch.ownershipGeneration)
+        || lane.epoch !== dispatch.providerEpoch
+        || controller.signal.aborted
+        || intent.settled
+      ) {
+        throw dashboardAbortError('provider dispatch superseded');
+      }
+      if (codexBarOwnershipMismatch(resolved, intent.ownership)) {
+        throw ownershipMismatchError();
+      }
+      const configSnapshot = withCodexBarOwnership(resolved || resolverBaseConfig, intent.ownership);
       configSnapshot.limitProviders = [lane.provider];
       if (intent.accountScoped) configSnapshot.limitRefreshScope = cloneValue(intent.scope);
       else delete configSnapshot.limitRefreshScope;
-      const physicalMs = Number(physicalBound(lane.provider, configSnapshot, deps));
+      const dashboardOwned = intent.owner === 'codexbar';
+      const nativeConfigSnapshot = withoutCodexBarToken(configSnapshot);
+      const physicalMs = Number(physicalBound(lane.provider, nativeConfigSnapshot, deps));
       const deadlineMs = physicalMs + cleanupGraceMs;
       const rows = await runWithProbeDeadline(
-        ({ signal }) => probeProvider(lane.provider, configSnapshot, {
-          signal: AbortSignal.any([signal, controller.signal]),
-          deadlineMs,
-          scope: cloneValue(intent.scope),
-          reason: intent.reason,
-          onRetryAfter(value) {
-            const parsed = Number(value);
-            if (!Number.isFinite(parsed) || parsed <= 0) return;
-            reportedRetryAfterMs = Math.max(reportedRetryAfterMs || 0, parsed);
+        ({ signal }) => {
+          const combinedSignal = AbortSignal.any([signal, controller.signal]);
+          if (dashboardOwned) {
+            return probeCodexBarProvider(
+              lane.provider,
+              intent.ownership,
+              combinedSignal,
+              intent.dashboardBatch
+            );
           }
-        }, { ...deps, providerRuntimeState }),
+          return probeProvider(lane.provider, nativeConfigSnapshot, {
+            signal: combinedSignal,
+            deadlineMs,
+            scope: cloneValue(intent.scope),
+            reason: intent.reason,
+            onRetryAfter(value) {
+              const parsed = Number(value);
+              if (!Number.isFinite(parsed) || parsed <= 0) return;
+              reportedRetryAfterMs = Math.max(reportedRetryAfterMs || 0, parsed);
+            }
+          }, { ...deps, providerRuntimeState });
+        },
         { deadlineMs }
       );
       const committed = commitRows(lane, dispatch, rows);
@@ -642,8 +1014,17 @@ function createLimitsRuntime(initialOptions = {}, deps = {}) {
       finishIntent(intent, { superseded: !committed, snapshot: getSnapshot() });
     } catch (error) {
       const committed = commitRows(lane, dispatch, [], error);
-      if (committed) applyRetryPolicy(lane, intent, [], error, reportedRetryAfterMs || error?.retryAfterMs);
-      finishIntent(intent, { superseded: !committed, error, snapshot: getSnapshot() });
+      const safeError = dispatch.owner === 'codexbar' ? safeCodexBarFailure(error) : error;
+      if (committed) {
+        applyRetryPolicy(
+          lane,
+          intent,
+          [],
+          safeError,
+          reportedRetryAfterMs || error?.retryAfterMs
+        );
+      }
+      finishIntent(intent, { superseded: !committed, error: safeError, snapshot: getSnapshot() });
     } finally {
       if (lane.active?.intent === intent) lane.active = null;
       emitEvent('probe-finish', lane.provider, { reason: intent.reason });
@@ -668,11 +1049,16 @@ function createLimitsRuntime(initialOptions = {}, deps = {}) {
     }
   }
 
-  function queueScope(scope, reason) {
-    const provider = providerId(scope.provider);
+  function queueScope(scope, reason, dashboardBatch = createDashboardBatch()) {
+    const provider = providerId(scope?.provider);
     if (!provider || stopped || !enabled || !configuredProviders.has(provider)) {
       return Promise.resolve({ superseded: true, reason: 'disabled' });
     }
+    const ownership = codexBarOwnershipState(config);
+    const ownershipGeneration = dashboardGeneration;
+    const owner = ownership.enabled && ownership.providers.has(provider) ? 'codexbar' : 'native';
+    let requestedScope = normalizedScope(scope);
+    if (owner === 'codexbar') requestedScope = { provider };
     const lane = laneFor(provider);
     if (bypassesProviderCooldown(reason)) {
       resetRetryPolicy(lane);
@@ -684,8 +1070,8 @@ function createLimitsRuntime(initialOptions = {}, deps = {}) {
         retryAt: new Date(lane.retryNotBefore).toISOString()
       });
     }
-    const accountScoped = isAccountScope(scope);
-    const identityKey = scopeIdentityKey(scope);
+    const accountScoped = isAccountScope(requestedScope);
+    const identityKey = scopeIdentityKey(requestedScope);
     const key = accountScoped ? identityKey : `${provider}:*`;
 
     if (accountScoped) {
@@ -713,11 +1099,17 @@ function createLimitsRuntime(initialOptions = {}, deps = {}) {
       key,
       identityKey,
       accountScoped,
-      scope: cloneValue(scope),
+      scope: cloneValue(requestedScope),
       reason,
+      owner,
+      ownership,
+      ownershipGeneration,
+      dashboardBatch,
+      dashboardBatchRetained: false,
       resolve,
       settled: false
     };
+    setDashboardBatchRetained(intent, owner === 'codexbar');
     lane.pending.set(key, intent);
     enqueueProvider(provider);
     return promise;
@@ -725,17 +1117,24 @@ function createLimitsRuntime(initialOptions = {}, deps = {}) {
 
   function refresh(scope = {}, reason = 'manual') {
     const normalized = normalizedScope(scope);
-    if (normalized.provider) return queueScope(normalized, reason);
+    const dashboardBatch = createDashboardBatch();
+    if (normalized.provider) return queueScope(normalized, reason, dashboardBatch);
     if (reason === 'manual' && started && enabled && !stopped) {
       lastScheduledFullAt = now();
       scheduleInterval(refreshMs);
     }
-    return Promise.all([...configuredProviders].map((provider) => queueScope({ provider }, reason)))
+    return Promise.all([...configuredProviders].map((provider) => (
+      queueScope({ provider }, reason, dashboardBatch)
+    )))
       .then(() => getSnapshot());
   }
 
   function clear(scope = {}, reason = 'removed') {
-    const normalized = normalizedScope(scope);
+    let normalized = normalizedScope(scope);
+    const ownership = codexBarOwnershipState(config);
+    if (normalized.provider && ownership.enabled && ownership.providers.has(normalized.provider)) {
+      normalized = { provider: normalized.provider };
+    }
     const providers = normalized.provider ? [normalized.provider] : [...configuredProviders];
     for (const provider of providers) {
       const lane = lanes.get(provider);
@@ -768,6 +1167,7 @@ function createLimitsRuntime(initialOptions = {}, deps = {}) {
     const previousEnabled = enabled;
     const previousRefreshMs = refreshMs;
     const previousProviders = configuredProviders;
+    const previousDashboardOwnership = codexBarOwnershipState(config);
     config = { ...config, ...cloneValue(nextOptions) };
     enabled = parseBoolean(config.limitsEnabled ?? config.enabled, true);
     refreshMode = normalizeLimitsRefreshMode(config.limitsRefreshMode);
@@ -775,6 +1175,27 @@ function createLimitsRuntime(initialOptions = {}, deps = {}) {
       ? LIMITS_ADAPTIVE_BASE_MS
       : normalizeLimitsRefreshMs(config.limitsRefreshMs ?? config.refreshMs);
     configuredProviders = new Set(parseLimitProviders(config.limitProviders ?? config.providers));
+    const nextDashboardOwnership = codexBarOwnershipState(config);
+    const dashboardChanged = codexBarConfigChanged(
+      previousDashboardOwnership,
+      nextDashboardOwnership
+    );
+    const dashboardAffectedProviders = new Set([
+      ...codexBarOwnedProviders(previousDashboardOwnership),
+      ...codexBarOwnedProviders(nextDashboardOwnership)
+    ]);
+
+    if (dashboardChanged) {
+      invalidateDashboardBatches('CodexBar configuration changed');
+      for (const provider of dashboardAffectedProviders) {
+        const lane = lanes.get(provider);
+        if (!lane) continue;
+        cancelLane(lane, 'CodexBar configuration changed');
+        resetRetryPolicy(lane);
+        lane.identities.clear();
+        lane.accountRevisions.clear();
+      }
+    }
 
     for (const provider of previousProviders) {
       if (configuredProviders.has(provider)) continue;
@@ -788,6 +1209,8 @@ function createLimitsRuntime(initialOptions = {}, deps = {}) {
     }
 
     if (!enabled) {
+      if (!dashboardChanged) invalidateDashboardBatches('limits disabled');
+      clearDashboardExpiryTimer();
       clearIntervalTimer();
       clearUrgencyTimer();
       if (resetTimer !== null) clearTimer(resetTimer);
@@ -801,12 +1224,19 @@ function createLimitsRuntime(initialOptions = {}, deps = {}) {
       return getSnapshot();
     }
 
+    const reconfigureBatch = createDashboardBatch();
     if (!previousEnabled && enabled) {
-      for (const provider of configuredProviders) void queueScope({ provider }, 'enabled');
+      for (const provider of configuredProviders) {
+        void queueScope({ provider }, 'enabled', reconfigureBatch);
+      }
       lastScheduledFullAt = now();
     } else {
       for (const provider of configuredProviders) {
-        if (!previousProviders.has(provider)) void queueScope({ provider }, 'provider-added');
+        if (dashboardChanged && dashboardAffectedProviders.has(provider)) {
+          void queueScope({ provider }, 'settings-change', reconfigureBatch);
+        } else if (!previousProviders.has(provider)) {
+          void queueScope({ provider }, 'provider-added', reconfigureBatch);
+        }
       }
     }
 
@@ -867,7 +1297,9 @@ function createLimitsRuntime(initialOptions = {}, deps = {}) {
         retryAt: lane?.retryNotBefore > 0 ? new Date(lane.retryNotBefore).toISOString() : null,
         lastAttemptAt: latestAttempt,
         lastSuccessAt: latestSuccess,
-        lastFailureCode: latestFailure ? publicAttemptStatus(latestFailure.status) : null
+        lastFailureCode: latestFailure
+          ? latestFailure.code || publicAttemptStatus(latestFailure.status)
+          : null
       };
     });
     return {
@@ -900,6 +1332,8 @@ function createLimitsRuntime(initialOptions = {}, deps = {}) {
     if (stopped) return;
     stopped = true;
     runtimeEpoch += 1;
+    invalidateDashboardBatches('runtime stopped');
+    clearDashboardExpiryTimer();
     clearIntervalTimer();
     clearUrgencyTimer();
     if (resetTimer !== null) clearTimer(resetTimer);
@@ -913,8 +1347,12 @@ function createLimitsRuntime(initialOptions = {}, deps = {}) {
     listeners.clear();
   }
 
+  const initialDashboardOwnership = codexBarOwnershipState(config);
   for (const row of normalizeLimitsSummary(config.previousLimits || {}).providers) {
     if (!configuredProviders.has(row.provider)) continue;
+    const dashboardOwned = initialDashboardOwnership.enabled
+      && initialDashboardOwnership.providers.has(row.provider);
+    if (dashboardOwned !== (row.producer === 'codexbar')) continue;
     const lane = laneFor(row.provider);
     const identityKey = rowIdentityKey(row);
     const at = row.updatedAt || new Date(now()).toISOString();

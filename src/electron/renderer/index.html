@@ -605,6 +605,25 @@
                 <label class="inline-option"><input type="radio" name="showLimitUsed" value="used" id="showLimitUsedUsed" /><span data-i18n="settings.limits.barsUsed">Used</span></label>
               </div>
             </div>
+            <div id="codexbarSettingsGroup" class="settings-subgroup">
+              <div class="settings-group-header"><span data-i18n="settings.codexbar.title">CodexBar Dashboard</span></div>
+              <p id="codexbarDashboardStatus" class="settings-note" role="status" aria-live="polite"></p>
+              <label class="checkbox-label settings-item"><span class="settings-item-text"><span class="settings-item-title" data-i18n="settings.codexbar.enabled">Enable CodexBar</span></span><input id="codexbarDashboardEnabledInput" type="checkbox" /></label>
+              <label class="settings-field" for="codexbarDashboardUrlInput"><span data-i18n="settings.codexbar.url">Dashboard URL</span>
+                <input id="codexbarDashboardUrlInput" type="url" autocomplete="off" />
+              </label>
+              <div class="settings-field">
+                <span data-i18n="settings.codexbar.providers">Delegated providers</span>
+                <div id="codexbarDelegatedProviderCheckboxes" class="client-checkboxes"></div>
+              </div>
+              <label class="settings-field" for="codexbarDashboardTokenInput"><span data-i18n="settings.codexbar.token">Bearer token</span>
+                <input id="codexbarDashboardTokenInput" type="password" autocomplete="off" />
+              </label>
+              <div class="settings-actions">
+                <button id="codexbarDashboardSaveButton" type="button" data-i18n="settings.codexbar.save">Save CodexBar settings</button>
+              </div>
+              <p id="codexbarDashboardFeedback" class="settings-note" role="status" aria-live="polite"></p>
+            </div>
           </div>
         </div>
 

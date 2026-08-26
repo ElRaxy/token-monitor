@@ -2,6 +2,7 @@
 
 const { clientsCsvForSetting } = require('../shared/clientTracking');
 const { normalizeHistoryIntervalMs } = require('../shared/collector');
+const { normalizeCodexBarConfig } = require('../shared/codexbarConfig');
 const {
   normalizeLimitsRefreshMode,
   normalizeLimitsRefreshMs,
@@ -53,7 +54,11 @@ const LIMITS_RECONFIGURE_KEYS = Object.freeze([
   'limitProviders',
   'limitsRefreshMode',
   'limitsRefreshMs',
-  'opencodeLocalLimitsEnabled'
+  'opencodeLocalLimitsEnabled',
+  'codexbarDashboardEnabled',
+  'codexbarDashboardUrl',
+  'codexbarDashboardToken',
+  'codexbarDelegatedProviders'
 ]);
 const SINK_STRUCTURAL_KEYS = Object.freeze(['syncUploadIntervalMs']);
 const LIMIT_PROVIDER_SETTING_KEYS = Object.freeze({
@@ -132,6 +137,12 @@ function usageConfigFromSettings(settings = {}, context = {}) {
 
 function limitsConfigFromSettings(settings = {}, context = {}) {
   const env = context.env || process.env;
+  const codexbarConfig = normalizeCodexBarConfig({
+    codexbarDashboardEnabled: settings.codexbarDashboardEnabled,
+    codexbarDashboardUrl: settings.codexbarDashboardUrl,
+    codexbarDashboardToken: context.codexbarDashboardToken,
+    codexbarDelegatedProviders: settings.codexbarDelegatedProviders
+  });
   // The Electron widget uses the WorkBuddy app's local sign-in state. Keep the
   // raw token fallback available to the headless agent, but never let a desktop
   // .env or legacy settings value silently bypass the app-owned session.
@@ -145,6 +156,7 @@ function limitsConfigFromSettings(settings = {}, context = {}) {
     limitProviders: settings.limitProviders ?? context.defaultLimitProviders,
     limitsRefreshMode: normalizeLimitsRefreshMode(settings.limitsRefreshMode),
     limitsRefreshMs: normalizeLimitsRefreshMs(settings.limitsRefreshMs),
+    ...codexbarConfig,
     claudeWebCookie: settings.claudeWebCookie
       || env.CLAUDE_WEB_COOKIE
       || '',

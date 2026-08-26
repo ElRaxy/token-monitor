@@ -43,6 +43,9 @@ TOKEN_MONITOR_HISTORY_ENABLED=       # optional — defaults on; 0 skips trend h
 TOKEN_MONITOR_SESSION_USAGE_ARCHIVE_ENABLED= # optional — defaults on; 0 stops archiving deleted-session usage
 TOKEN_MONITOR_LIMITS_ENABLED=        # optional — defaults on; 0 skips CLI probing
 TOKEN_MONITOR_LIMIT_PROVIDERS=       # optional — defaults to all supported providers
+TOKEN_MONITOR_CODEXBAR_URL=          # optional — HTTP loopback dashboard-v1 base URL
+TOKEN_MONITOR_CODEXBAR_TOKEN=        # optional — dashboard bearer; never put it in argv
+TOKEN_MONITOR_CODEXBAR_PROVIDERS=    # optional — canonical delegated provider IDs
 TOKEN_MONITOR_LIMITS_REFRESH_MODE=   # optional — fixed (default) or adaptive
 TOKEN_MONITOR_LIMITS_REFRESH_MS=     # optional — interval for fixed mode; defaults to 300000
 # WorkBuddy: the desktop widget auto-detects the signed-in local app when the
@@ -62,6 +65,30 @@ TOKEN_MONITOR_WORKBUDDY_LOCALE=       # headless only — en or zh
 Provider credentials (Grok, DeepSeek, Minimax, Copilot, GLM / GLM Team, Volcengine, Qoder, Command Code, WorkBuddy, Ollama, Kimi, …) and proxy settings live in the same file. **`.env.example` is the complete, authoritative list** — start from it rather than copying keys by hand, since it stays in sync with the code. The desktop widget automatically reads the session owned by the local WorkBuddy app when that provider is enabled; the WorkBuddy token fields above remain only for headless/CLI deployments.
 
 The widget reads most settings as first-run defaults. WorkBuddy follows the same provider checkbox as other auto-detected integrations on macOS and Windows; Linux local-app monitoring is unsupported. Desktop users do not copy a token, and the WorkBuddy token fields above apply only to the headless agent/CLI. The agent and hub take a CLI flag over an env var over the built-in default.
+
+### CodexBar dashboard-v1 limits
+
+The CodexBar integration is opt-in and disabled by default. In the widget, configure it inside **AI Tool Limits → CodexBar Dashboard**. For the headless agent, set `TOKEN_MONITOR_CODEXBAR_URL`, `TOKEN_MONITOR_CODEXBAR_TOKEN`, and `TOKEN_MONITOR_CODEXBAR_PROVIDERS`; supplying only part of the configuration fails closed instead of enabling it.
+
+Run the persistent `codexbar serve` process on an HTTP loopback address such as `http://127.0.0.1:8080` or `http://localhost:8080`. Token Monitor requests the fixed `/dashboard/v1/snapshot` endpoint and sends the secret as `Authorization: Bearer <token>`. LAN hosts, HTTPS URLs, query credentials, and secrets in command-line arguments are not accepted by this integration.
+
+```bash
+# Load this value from a password manager or another private environment source.
+export CODEXBAR_DASHBOARD_TOKEN='replace-with-a-long-random-secret'
+codexbar serve --host 127.0.0.1 --port 8080 --identity redacted
+```
+
+Use the same bearer in Token Monitor. Keep it in the environment or the widget's private credential store; do not pass it through CodexBar's `--dashboard-token` flag because process listings can expose command-line arguments.
+
+For each delegated provider, CodexBar is the single owner and Token Monitor never runs that provider's native probe. Removing a provider from the delegated list returns ownership to Token Monitor through a configuration change; an upstream error does not trigger an implicit native fallback.
+
+The CodexBar integration does not import token usage, costs, sessions, projects, history, or account credentials. Token Monitor consumes only normalized provider-limit windows and keeps its existing usage, cost, and session collectors authoritative.
+
+Account identity must arrive redacted from CodexBar. Token Monitor ignores dashboard identity and account objects, and never derives a stable account key from a redacted email or label.
+
+Canonical delegated provider IDs are `claude`, `codex`, `opencode`, `cursor`, `antigravity`, `kimi`, `grok`, `copilot`, `commandcode`, `mimo`, `zai`, `kiro`, `qoder`, `deepseek`, `openrouter`, `minimax`, `volcengine`, and `ollama`. The incoming dashboard alias `doubao` can normalize to `volcengine`, but `doubao` is rejected in Token Monitor configuration; configure `volcengine` explicitly.
+
+`codexbar dashboard` is a one-shot diagnostic command, not a poller, and must never be placed in Token Monitor's refresh loop. Keep `codexbar serve` running for normal collection.
 
 One-shot run (collect once and exit — useful for cron / launchd):
 

@@ -37,8 +37,11 @@ function createDeviceRuntime(options = {}, deps = {}) {
       : {}),
     onRecord(record, meta) {
       if (!active) return;
+      const transportRecord = meta.source === 'limits'
+        ? { ...record, limitsOnly: true }
+        : record;
       try {
-        options.onRecord?.(record, meta);
+        options.onRecord?.(transportRecord, meta);
       } catch (error) {
         try {
           options.onError?.(error, 'record');
@@ -47,7 +50,7 @@ function createDeviceRuntime(options = {}, deps = {}) {
         }
       }
       if (sink?.enqueue) {
-        Promise.resolve(sink.enqueue(record, meta.revision)).catch((error) => {
+        Promise.resolve(sink.enqueue(transportRecord, meta.revision)).catch((error) => {
           options.onError?.(error, 'sink');
         });
       }

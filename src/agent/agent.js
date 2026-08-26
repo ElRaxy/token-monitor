@@ -5,6 +5,7 @@ const path = require('node:path');
 const { defaultDeviceId, loadDotEnv, parseArgs, pidFilePath } = require('../shared/config');
 const { appVersion } = require('../shared/appVersion');
 const { clientsCsvForSetting } = require('../shared/clientTracking');
+const { normalizeCodexBarConfig } = require('../shared/codexbarConfig');
 const { normalizeHistoryIntervalMs } = require('../shared/collector');
 const {
   normalizeLimitsRefreshMode,
@@ -23,67 +24,84 @@ const {
   writeSessionUsageArchive
 } = require('../shared/sessionUsageArchive');
 
-loadDotEnv();
-const args = parseArgs(process.argv.slice(2));
-const hubUrl = String(args.hub || args.hubUrl || process.env.TOKEN_MONITOR_HUB_URL || 'http://127.0.0.1:17321').replace(/\/$/, '');
-const secret = String(args.secret || process.env.TOKEN_MONITOR_SECRET || '').trim();
-const deviceId = String(args.device || args.deviceId || process.env.TOKEN_MONITOR_DEVICE_ID || defaultDeviceId());
-const intervalMs = Number(args.interval || args.intervalMs || process.env.TOKEN_MONITOR_INTERVAL_MS || 5 * 60 * 1000);
-const watchEnabled = String(args.watch ?? process.env.TOKEN_MONITOR_WATCH ?? '1') !== '0';
-const watchDebounceMs = Number(args.watchDebounceMs || process.env.TOKEN_MONITOR_WATCH_DEBOUNCE_MS || 1500);
-const clients = clientsCsvForSetting(args.clients ?? process.env.TOKEN_MONITOR_CLIENTS);
-const allTimeSince = String(args.since || args.allTimeSince || process.env.TOKEN_MONITOR_ALL_TIME_SINCE || '2024-01-01');
-const commandTimeoutMs = Number(args.timeoutMs || process.env.TOKEN_MONITOR_TOKSCALE_TIMEOUT_MS || 120 * 1000);
-const limitsEnabled = parseBoolean(args.limits ?? args.limitsEnabled ?? process.env.TOKEN_MONITOR_LIMITS_ENABLED, true);
-const limitProviders = parseLimitProviders(args.limitProviders ?? process.env.TOKEN_MONITOR_LIMIT_PROVIDERS).join(',');
-const limitsRefreshMs = normalizeLimitsRefreshMs(args.limitsRefreshMs || process.env.TOKEN_MONITOR_LIMITS_REFRESH_MS);
-const limitsRefreshMode = normalizeLimitsRefreshMode(args.limitsRefreshMode || process.env.TOKEN_MONITOR_LIMITS_REFRESH_MODE);
-const historyEnabled = parseBoolean(args.history ?? args.historyEnabled ?? process.env.TOKEN_MONITOR_HISTORY_ENABLED, true);
-const projectsEnabled = parseBoolean(args.projects ?? args.projectsEnabled ?? process.env.TOKEN_MONITOR_PROJECTS_ENABLED, false);
-const sessionUsageArchiveEnabled = parseBoolean(args.sessionArchive ?? args.sessionUsageArchiveEnabled ?? process.env.TOKEN_MONITOR_SESSION_USAGE_ARCHIVE_ENABLED, true);
-const wslScanEnabled = parseBoolean(args.wslScan ?? args.wslScanEnabled ?? process.env.TOKEN_MONITOR_WSL_SCAN, true);
-const opencodeLocalLimitsEnabled = parseBoolean(
-  args['opencode-local-limits']
-    ?? args.opencodeLocalLimits
-    ?? args.opencodeLocalLimitsEnabled
-    ?? process.env.TOKEN_MONITOR_OPENCODE_LOCAL_LIMITS,
-  false
-);
-// The key OpenCode stores for itself needs no configuration, so an unattended
-// agent reports it by default. Switched off for a machine signed in to an
-// account whose quota should not leave it. The widget resolves the same setting
-// through settings.json; here it is env or flag, like every other agent option.
-const opencodeAmbientEnabled = parseBoolean(
-  args['opencode-ambient']
-    ?? args.opencodeAmbient
-    ?? args.opencodeAmbientEnabled
-    ?? process.env.TOKEN_MONITOR_OPENCODE_AMBIENT,
-  true
-);
-const opencodeCookie = String(process.env.TOKEN_MONITOR_OPENCODE_COOKIE || '').trim();
-const once = Boolean(args.once);
-const dryRun = Boolean(args['dry-run'] || args.dryRun);
+function buildAgentConfiguration(options = {}) {
+  const env = options.env && typeof options.env === 'object' ? options.env : {};
+  const argv = Array.isArray(options.argv) ? options.argv : [];
+  const args = parseArgs(argv);
+  const hubUrl = String(args.hub || args.hubUrl || env.TOKEN_MONITOR_HUB_URL || 'http://127.0.0.1:17321').replace(/\/$/, '');
+  const secret = String(args.secret || env.TOKEN_MONITOR_SECRET || '').trim();
+  const deviceId = String(args.device || args.deviceId || env.TOKEN_MONITOR_DEVICE_ID || defaultDeviceId());
+  const intervalMs = Number(args.interval || args.intervalMs || env.TOKEN_MONITOR_INTERVAL_MS || 5 * 60 * 1000);
+  const watchEnabled = String(args.watch ?? env.TOKEN_MONITOR_WATCH ?? '1') !== '0';
+  const watchDebounceMs = Number(args.watchDebounceMs || env.TOKEN_MONITOR_WATCH_DEBOUNCE_MS || 1500);
+  const clients = clientsCsvForSetting(args.clients ?? env.TOKEN_MONITOR_CLIENTS);
+  const allTimeSince = String(args.since || args.allTimeSince || env.TOKEN_MONITOR_ALL_TIME_SINCE || '2024-01-01');
+  const commandTimeoutMs = Number(args.timeoutMs || env.TOKEN_MONITOR_TOKSCALE_TIMEOUT_MS || 120 * 1000);
+  const limitsEnabled = parseBoolean(args.limits ?? args.limitsEnabled ?? env.TOKEN_MONITOR_LIMITS_ENABLED, true);
+  const limitProviders = parseLimitProviders(args.limitProviders ?? env.TOKEN_MONITOR_LIMIT_PROVIDERS).join(',');
+  const limitsRefreshMs = normalizeLimitsRefreshMs(args.limitsRefreshMs || env.TOKEN_MONITOR_LIMITS_REFRESH_MS);
+  const limitsRefreshMode = normalizeLimitsRefreshMode(args.limitsRefreshMode || env.TOKEN_MONITOR_LIMITS_REFRESH_MODE);
+  const historyEnabled = parseBoolean(args.history ?? args.historyEnabled ?? env.TOKEN_MONITOR_HISTORY_ENABLED, true);
+  const projectsEnabled = parseBoolean(args.projects ?? args.projectsEnabled ?? env.TOKEN_MONITOR_PROJECTS_ENABLED, false);
+  const sessionUsageArchiveEnabled = parseBoolean(args.sessionArchive ?? args.sessionUsageArchiveEnabled ?? env.TOKEN_MONITOR_SESSION_USAGE_ARCHIVE_ENABLED, true);
+  const wslScanEnabled = parseBoolean(args.wslScan ?? args.wslScanEnabled ?? env.TOKEN_MONITOR_WSL_SCAN, true);
+  const opencodeLocalLimitsEnabled = parseBoolean(
+    args['opencode-local-limits']
+      ?? args.opencodeLocalLimits
+      ?? args.opencodeLocalLimitsEnabled
+      ?? env.TOKEN_MONITOR_OPENCODE_LOCAL_LIMITS,
+    false
+  );
+  // The key OpenCode stores for itself needs no configuration, so an unattended
+  // agent reports it by default. Switched off for a machine signed in to an
+  // account whose quota should not leave it. The widget resolves the same setting
+  // through settings.json; here it is env or flag, like every other agent option.
+  const opencodeAmbientEnv = env === process.env
+    ? process.env.TOKEN_MONITOR_OPENCODE_AMBIENT
+    : env.TOKEN_MONITOR_OPENCODE_AMBIENT;
+  const opencodeAmbientEnabled = parseBoolean(
+    args['opencode-ambient']
+      ?? args.opencodeAmbient
+      ?? args.opencodeAmbientEnabled
+      ?? opencodeAmbientEnv,
+    true
+  );
+  const opencodeCookie = String(env.TOKEN_MONITOR_OPENCODE_COOKIE || '').trim();
+  const once = Boolean(args.once);
+  const dryRun = Boolean(args['dry-run'] || args.dryRun);
+  const agentVersion = appVersion();
+  const codexbarConfigured = [
+    'TOKEN_MONITOR_CODEXBAR_URL',
+    'TOKEN_MONITOR_CODEXBAR_TOKEN',
+    'TOKEN_MONITOR_CODEXBAR_PROVIDERS'
+  ].some((key) => String(env[key] || '').trim().length > 0);
+  const codexbarConfig = normalizeCodexBarConfig({
+    codexbarDashboardEnabled: codexbarConfigured,
+    codexbarDashboardUrl: env.TOKEN_MONITOR_CODEXBAR_URL,
+    codexbarDashboardToken: env.TOKEN_MONITOR_CODEXBAR_TOKEN,
+    codexbarDelegatedProviders: env.TOKEN_MONITOR_CODEXBAR_PROVIDERS
+  });
 
-const usageOptions = {
-  clients,
-  allTimeSince,
-  commandTimeoutMs,
-  deviceId,
-  agentVersion: appVersion(),
-  agentRuntime: 'headless-agent',
-  projectsEnabled,
-  historyEnabled,
-  historyIntervalMs: normalizeHistoryIntervalMs(process.env.TOKEN_MONITOR_HISTORY_INTERVAL_MS),
-  dailyHistoryArchiveEnabled: sessionUsageArchiveEnabled,
-  dailyHistoryArchiveWriteEnabled: !dryRun,
-  anchorPersistenceEnabled: !once && !dryRun,
-  intervalMs,
-  watchEnabled,
-  watchDebounceMs,
-  wslScanEnabled,
-  onError: (error, reason) => console.error(`[${new Date().toISOString()}] (${reason}) ${error.message}`),
-  logger: (message) => (dryRun ? console.error(message) : console.log(message))
-};
+  const usageOptions = {
+    clients,
+    allTimeSince,
+    commandTimeoutMs,
+    deviceId,
+    agentVersion,
+    agentRuntime: 'headless-agent',
+    projectsEnabled,
+    historyEnabled,
+    historyIntervalMs: normalizeHistoryIntervalMs(env.TOKEN_MONITOR_HISTORY_INTERVAL_MS),
+    dailyHistoryArchiveEnabled: sessionUsageArchiveEnabled,
+    dailyHistoryArchiveWriteEnabled: !dryRun,
+    anchorPersistenceEnabled: !once && !dryRun,
+    intervalMs,
+    watchEnabled,
+    watchDebounceMs,
+    wslScanEnabled,
+    onError: (error, reason) => console.error(`[${new Date().toISOString()}] (${reason}) ${error.message}`),
+    logger: (message) => (dryRun ? console.error(message) : console.log(message))
+  };
 const limitsOptions = {
   limitsEnabled,
   limitProviders,
@@ -92,34 +110,59 @@ const limitsOptions = {
   claudeWebCookie: '',
   opencodeLocalLimitsEnabled,
   opencodeAmbientEnabled,
-  opencodeCookie
+  opencodeCookie,
+  ...codexbarConfig
 };
+  return {
+    allTimeSince,
+    deviceId,
+    dryRun,
+    historyEnabled,
+    hubUrl,
+    intervalMs,
+    limitProviders,
+    limitsEnabled,
+    limitsOptions,
+    limitsRefreshMode,
+    limitsRefreshMs,
+    once,
+    projectsEnabled,
+    secret,
+    sessionUsageArchiveEnabled,
+    usageOptions,
+    watchEnabled
+  };
+}
+
 let sessionUsageArchive;
 
-function summaryWithSessionUsageArchive(summary, now = new Date()) {
+function summaryWithSessionUsageArchive(summary, configuration, now = new Date()) {
   let visibleSummary = summary;
-  if (sessionUsageArchiveEnabled) {
+  if (configuration.sessionUsageArchiveEnabled) {
     const archiveDate = sessionUsageArchiveDate(summary, now);
     const previous = sessionUsageArchive || readSessionUsageArchive();
     const next = captureSessionUsageArchive(previous, summary, archiveDate);
-    if (!dryRun && JSON.stringify(next) !== JSON.stringify(previous)) {
+    if (!configuration.dryRun && JSON.stringify(next) !== JSON.stringify(previous)) {
       try {
         writeSessionUsageArchive(next);
         sessionUsageArchive = next;
       } catch (error) {
         console.error(`[session-archive] write failed: ${error.message}`);
       }
-    } else if (!dryRun) {
+    } else if (!configuration.dryRun) {
       sessionUsageArchive = next;
     }
     visibleSummary = applySessionUsageArchive(summary, next, { now: archiveDate });
   }
-  return projectsEnabled ? applyProjectRollups(visibleSummary) : visibleSummary;
+  return configuration.projectsEnabled ? applyProjectRollups(visibleSummary) : visibleSummary;
 }
 
-async function postUsage(summary) {
-  const { response } = await postSyncPayload(fetch, `${hubUrl}/api/ingest`, {
-    headers: { 'content-type': 'application/json', ...(secret ? { authorization: `Bearer ${secret}` } : {}) },
+async function postUsage(summary, configuration) {
+  const { response } = await postSyncPayload(fetch, `${configuration.hubUrl}/api/ingest`, {
+    headers: {
+      'content-type': 'application/json',
+      ...(configuration.secret ? { authorization: `Bearer ${configuration.secret}` } : {})
+    },
     summary,
     logger: (message) => console.warn(`[sync] ${message}`)
   });
@@ -127,9 +170,9 @@ async function postUsage(summary) {
   return response.json();
 }
 
-async function deliver(summary) {
-  if (dryRun) { console.log(JSON.stringify(summary, null, 2)); return; }
-  await postUsage(summary);
+async function deliver(summary, configuration) {
+  if (configuration.dryRun) { console.log(JSON.stringify(summary, null, 2)); return; }
+  await postUsage(summary, configuration);
   console.log(`[${new Date().toISOString()}] posted ${summary.deviceId}: today=${summary.today.totalTokens} month=${summary.month.totalTokens} allTime=${summary.allTime.totalTokens}`);
 }
 
@@ -148,7 +191,25 @@ function registerPidFile(stopRuntime) {
   }
 }
 
-async function main() {
+async function main(configuration) {
+  const {
+    deviceId,
+    dryRun,
+    historyEnabled,
+    hubUrl,
+    intervalMs,
+    limitProviders,
+    limitsEnabled,
+    limitsOptions,
+    limitsRefreshMode,
+    limitsRefreshMs,
+    once,
+    projectsEnabled,
+    secret,
+    sessionUsageArchiveEnabled,
+    usageOptions,
+    watchEnabled
+  } = configuration;
   const startupMessage = `Token Monitor agent device=${deviceId} hub=${hubUrl} intervalMs=${intervalMs} watch=${watchEnabled} projects=${projectsEnabled ? 'on' : 'off'} history=${historyEnabled ? 'on' : 'off'} sessionArchive=${sessionUsageArchiveEnabled ? 'on' : 'off'} limits=${limitsEnabled ? `${limitProviders || 'none'}:${limitsRefreshMode === 'adaptive' ? 'adaptive' : `${limitsRefreshMs}ms`}` : 'off'}`;
   if (dryRun) console.error(startupMessage);
   else console.log(startupMessage);
@@ -158,11 +219,11 @@ async function main() {
   let runtimeHandle = null;
   if (!dryRun) registerPidFile(() => runtimeHandle?.stop());
   const runtimeOptions = {
-    envelope: { deviceId, agentVersion: appVersion(), agentRuntime: 'headless-agent' },
+    envelope: { deviceId, agentVersion: usageOptions.agentVersion, agentRuntime: 'headless-agent' },
     usageOptions,
     limitsOptions,
-    transformUsage: summaryWithSessionUsageArchive,
-    deliver,
+    transformUsage: (summary) => summaryWithSessionUsageArchive(summary, configuration),
+    deliver: (summary) => deliver(summary, configuration),
     dryRun,
     onRuntime: (runtime) => { runtimeHandle = runtime; },
     onError: (error, reason) => console.error(`[${new Date().toISOString()}] (${reason}) ${error.message}`)
@@ -174,4 +235,18 @@ async function main() {
   runtimeHandle = runAgent(runtimeOptions);
 }
 
-main().catch((error) => { console.error(error); process.exitCode = 1; });
+if (require.main === module) {
+  loadDotEnv();
+  let configuration;
+  try {
+    configuration = buildAgentConfiguration({ env: process.env, argv: process.argv.slice(2) });
+  } catch (error) {
+    console.error(error);
+    process.exitCode = 1;
+  }
+  if (configuration) {
+    main(configuration).catch((error) => { console.error(error); process.exitCode = 1; });
+  }
+}
+
+module.exports = { buildAgentConfiguration };

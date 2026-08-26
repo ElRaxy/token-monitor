@@ -280,3 +280,139 @@ test('runtime control wrappers do not delegate after stop', async () => {
 
   assert.deepEqual(calls, [['usageStop'], ['limitsStop']]);
 });
+
+test('R10 limitsOnly de CodexBar conserva íntegro el uso existente', async () => {
+  const producedAt = '2026-08-25T08:00:00.000Z';
+  const nowMs = Date.parse('2026-08-25T08:01:00.000Z');
+  let dashboardFetchCalls = 0;
+  let nativeProbeCalls = 0;
+  let usageRuntimeCreates = 0;
+  let usageRuntimeStops = 0;
+  let usageRuntimeOptions;
+  const records = [];
+  const runtime = createDeviceRuntime({
+    envelope: { deviceId: 'device-1', hostname: 'host' },
+    limitsOptions: {
+      limitsEnabled: true,
+      limitProviders: ['codex'],
+      codexbarDashboardEnabled: true,
+      codexbarDashboardUrl: 'http://127.0.0.1:8080',
+      codexbarDashboardToken: 'fixture-token',
+      codexbarDelegatedProviders: 'codex,claude'
+    },
+    onRecord: (record, meta) => records.push({ record, meta })
+  }, {
+    createUsageRuntime(options) {
+      usageRuntimeCreates += 1;
+      usageRuntimeOptions = options;
+      return {
+        getDiagnostics: () => ({ state: 'idle' }),
+        refreshClient: async () => true,
+        stop: () => { usageRuntimeStops += 1; },
+        tick: async () => true
+      };
+    },
+    limitsDeps: {
+      autoRetry: false,
+      autoStart: false,
+      cleanupGraceMs: 0,
+      maxConcurrency: 1,
+      now: () => nowMs,
+      providerPhysicalBoundMs: () => 100,
+      fetchCodexBarDashboard: async () => {
+        dashboardFetchCalls += 1;
+        return {
+          limits: {
+            updatedAt: producedAt,
+            refreshMs: 90_000,
+            providers: [{
+              provider: 'codex',
+              source: 'oauth',
+              status: 'ok',
+              updatedAt: producedAt,
+              windows: [{ kind: 'session', usedPercent: 25 }],
+              producer: 'codexbar',
+              producerVersion: '0.55.0',
+              producedAt,
+              staleAfterMs: 180_000
+            }]
+          },
+          meta: {
+            schemaVersion: 1,
+            producer: 'codexbar',
+            producerVersion: '0.55.0',
+            generatedAt: producedAt,
+            staleAfterMs: 180_000
+          },
+          diagnostics: []
+        };
+      },
+      probeProvider: async () => {
+        nativeProbeCalls += 1;
+        return [{
+          provider: 'codex',
+          accountKey: 'native',
+          status: 'ok',
+          updatedAt: producedAt,
+          windows: [{ kind: 'session', usedPercent: 99 }]
+        }];
+      }
+    }
+  });
+
+  const usage = {
+    updatedAt: '2026-08-25T07:59:00.000Z',
+    today: {
+      totalTokens: 11,
+      sessions: { one: { id: 'one', client: 'codex', totalTokens: 11 } },
+      projects: { alpha: { label: 'Alpha', tokens: 11, clients: { codex: 11 } } }
+    },
+    month: {
+      totalTokens: 22,
+      sessions: { two: { id: 'two', client: 'claude', totalTokens: 22 } },
+      projects: { beta: { label: 'Beta', tokens: 22, clients: { claude: 22 } } }
+    },
+    allTime: {
+      totalTokens: 33,
+      sessions: { three: { id: 'three', client: 'codex', totalTokens: 33 } },
+      projects: { gamma: { label: 'Gamma', tokens: 33, clients: { codex: 33 } } }
+    },
+    projectsEnabled: true,
+    nativeProjects: { alpha: { label: 'Alpha', tokens: 11 } },
+    history: {
+      daily: [{ date: '2026-08-25', totalTokens: 11, costUsd: 0 }],
+      monthly: [{ month: '2026-08', totalTokens: 22, costUsd: 0 }],
+      summary: { totalTokens: 33 }
+    }
+  };
+  const usageProjection = (record) => ({
+    updatedAt: record.updatedAt,
+    today: record.today,
+    month: record.month,
+    allTime: record.allTime,
+    projectsEnabled: record.projectsEnabled,
+    nativeProjects: record.nativeProjects,
+    history: record.history
+  });
+
+  try {
+    usageRuntimeOptions.onUpdate(usage, 'startup');
+    const usageBytes = JSON.stringify(usageProjection(records.at(-1).record));
+    await runtime.refreshLimits({ provider: 'codex' }, 'manual');
+    const limitsRecord = records.at(-1);
+
+    assert.equal(limitsRecord.meta.source, 'limits');
+    assert.equal(limitsRecord.record.limitsOnly, true);
+    assert.equal(JSON.stringify(usageProjection(limitsRecord.record)), usageBytes);
+    assert.equal(limitsRecord.record.updatedAt, usage.updatedAt);
+    assert.equal(usageRuntimeCreates, 1);
+    assert.equal(usageRuntimeStops, 0);
+    assert.deepEqual({ dashboardFetchCalls, nativeProbeCalls }, {
+      dashboardFetchCalls: 1,
+      nativeProbeCalls: 0
+    });
+    assert.equal(limitsRecord.record.limits.providers[0].producer, 'codexbar');
+  } finally {
+    runtime.stop();
+  }
+});

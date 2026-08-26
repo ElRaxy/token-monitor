@@ -465,3 +465,65 @@ test('third-party profile changes invalidate only the third-party limits lane', 
   );
   assert.deepEqual(classification.limitScopes, [{ provider: 'thirdparty' }]);
 });
+
+test('R12 settings rechaza URL y providers inválidos sin perder config válida', () => {
+  const savedSettings = {
+    codexbarDashboardEnabled: true,
+    codexbarDashboardUrl: 'http://localhost:9090/',
+    codexbarDashboardToken: 'must-not-be-read-from-settings',
+    codexbarDelegatedProviders: 'claude,codex,claude'
+  };
+  const context = {
+    env: {},
+    codexbarDashboardToken: 'credential-store-bearer'
+  };
+  const savedCopy = structuredClone(savedSettings);
+  const validRuntime = limitsConfigFromSettings(savedSettings, context);
+
+  assert.deepEqual({
+    codexbarDashboardEnabled: validRuntime.codexbarDashboardEnabled,
+    codexbarDashboardUrl: validRuntime.codexbarDashboardUrl,
+    codexbarDashboardToken: validRuntime.codexbarDashboardToken,
+    codexbarDelegatedProviders: validRuntime.codexbarDelegatedProviders
+  }, {
+    codexbarDashboardEnabled: true,
+    codexbarDashboardUrl: 'http://localhost:9090',
+    codexbarDashboardToken: 'credential-store-bearer',
+    codexbarDelegatedProviders: ['claude', 'codex']
+  });
+
+  for (const patch of [
+    { codexbarDashboardUrl: 'https://private-settings-marker.example/secret-path' },
+    { codexbarDelegatedProviders: 'claude,private-provider-marker' },
+    { codexbarDelegatedProviders: 'doubao' }
+  ]) {
+    let error;
+    try {
+      limitsConfigFromSettings({ ...savedSettings, ...patch }, context);
+    } catch (caught) {
+      error = caught;
+    }
+    assert.equal(error?.name, 'CodexBarConfigError');
+    assert.match(error?.code || '', /^(unsafe-url|unknown-provider)$/);
+    assert.doesNotMatch(
+      `${error?.message || ''}\n${JSON.stringify(error)}`,
+      /credential-store-bearer|must-not-be-read|private-settings-marker|secret-path|private-provider-marker|doubao/i
+    );
+    assert.deepEqual(savedSettings, savedCopy, 'invalid candidate must not mutate the last valid settings');
+    assert.deepEqual(limitsConfigFromSettings(savedSettings, context), validRuntime);
+  }
+
+  const nextValues = {
+    codexbarDashboardEnabled: false,
+    codexbarDashboardUrl: 'http://127.0.0.2:8080',
+    codexbarDashboardToken: 'next-credential',
+    codexbarDelegatedProviders: 'kimi'
+  };
+  for (const [key, value] of Object.entries(nextValues)) {
+    const classification = classifySettingsChange(savedSettings, {
+      ...savedSettings,
+      [key]: value
+    });
+    assert.equal(classification.limitsReconfigure, true, key);
+  }
+});

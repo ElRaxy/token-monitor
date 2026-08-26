@@ -133,6 +133,39 @@ test('renderer redaction defaults new credential fields to hidden with explicit 
   assert.equal(redacted.kimiWebAccessToken, '');
 });
 
+test('R11 bearer queda en credential store y no llega al renderer', (t) => {
+  const dataDir = tempDataDir(t);
+  const settingsPath = path.join(dataDir, 'settings.json');
+  const store = new CredentialStore(dataDir);
+  const settings = {
+    language: 'en',
+    codexbarDashboardEnabled: true,
+    codexbarDashboardUrl: 'http://127.0.0.1:8080',
+    codexbarDelegatedProviders: 'claude,codex',
+    codexbarDashboardToken: 'codexbar-private-bearer'
+  };
+
+  persistSettingsAndCredentials({ store, settingsPath, settings, previousSettings: {} });
+
+  const credentialPath = path.join(dataDir, 'credentials.json');
+  const credentialDocument = JSON.parse(fs.readFileSync(credentialPath, 'utf8'));
+  assert.deepEqual(credentialDocument.credentials, {
+    integrations: { codexbar: { dashboardToken: 'codexbar-private-bearer' } }
+  });
+  assert.equal(store.settingsCredentials().codexbarDashboardToken, 'codexbar-private-bearer');
+  if (process.platform !== 'win32') assert.equal(fs.statSync(credentialPath).mode & 0o777, 0o600);
+
+  const settingsDocument = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  assert.equal(Object.hasOwn(settingsDocument, 'codexbarDashboardToken'), false);
+  assert.equal(settingsDocument.codexbarDashboardEnabled, true);
+  assert.equal(settingsDocument.codexbarDashboardUrl, 'http://127.0.0.1:8080');
+  assert.equal(settingsDocument.codexbarDelegatedProviders, 'claude,codex');
+
+  const rendererCredentials = credentialSettingsForRenderer(settings);
+  assert.equal(rendererCredentials.codexbarDashboardToken, '');
+  assert.doesNotMatch(JSON.stringify(rendererCredentials), /codexbar-private-bearer/);
+});
+
 test('migrates legacy settings once and keeps an existing credential authoritative', (t) => {
   const store = new CredentialStore(tempDataDir(t));
   store.writeDocument({

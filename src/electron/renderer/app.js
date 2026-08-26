@@ -1,6 +1,7 @@
 'use strict';
 
 const clientLabels = { claude: 'Claude Code', codex: 'Codex', hermes: 'Hermes Agent', gemini: 'Gemini', cursor: 'Cursor', opencode: 'OpenCode', openclaw: 'OpenClaw', antigravity: 'Antigravity', cline: 'Cline', kimi: 'Kimi', qwen: 'Qwen', grok: 'Grok Build', copilot: 'GitHub Copilot', pi: 'Pi', zed: 'Zed', kilocode: 'Kilo Code', commandcode: 'Command Code', micode: 'MiMo Code', zcode: 'ZCode', kiro: 'Kiro', codebuddy: 'CodeBuddy', workbuddy: 'WorkBuddy', proma: 'Proma', qodercn: 'Qoder CN', reasonix: 'Reasonix', dsh: 'DeepSeek Harness', cherrystudio: 'Cherry Studio' };
+const codexbarDashboardProviderIds = new Set();
 const reasonixSessionGuard = window.TokenMonitorReasonixSessionGuard;
 const { clientColors, fallbackModelColors, modelVendorFor, modelColor } = window.TokenMonitorUsageCharts;
 const motionPreferenceApi = window.TokenMonitorMotionPreference;
@@ -387,6 +388,13 @@ Object.assign(els, {
   syncUploadIntervalInput: document.getElementById('syncUploadIntervalInput'),
   collectionCadenceInput: document.getElementById('collectionCadenceInput'),
   collectionCadenceNote: document.getElementById('collectionCadenceNote'),
+  codexbarDashboardEnabledInput: document.getElementById('codexbarDashboardEnabledInput'),
+  codexbarDashboardUrlInput: document.getElementById('codexbarDashboardUrlInput'),
+  codexbarDelegatedProviderCheckboxes: document.getElementById('codexbarDelegatedProviderCheckboxes'),
+  codexbarDashboardTokenInput: document.getElementById('codexbarDashboardTokenInput'),
+  codexbarDashboardSaveButton: document.getElementById('codexbarDashboardSaveButton'),
+  codexbarDashboardStatus: document.getElementById('codexbarDashboardStatus'),
+  codexbarDashboardFeedback: document.getElementById('codexbarDashboardFeedback'),
   sessionUsageArchiveInput: document.getElementById('sessionUsageArchiveInput'),
   sessionUsageArchiveStatus: document.getElementById('sessionUsageArchiveStatus'),
   reduceMotionInputs: Array.from(document.querySelectorAll('input[name="reduceMotionOption"]')),
@@ -5828,6 +5836,7 @@ function openSettingsPanel() {
   els.settingsPanel.classList.remove('hidden');
   els.shell.classList.add('settings-open');
   els.shell.style.transform = 'translateZ(0)';
+  void refreshCodexBarDashboardStatus();
   requestAnimationFrame(() => { els.shell.style.transform = ''; });
 }
 
@@ -8505,6 +8514,142 @@ function reconcileHubDraftsAfterSave(submitted, submittedRevisions) {
   syncHubDraftFields();
 }
 
+function renderCodexBarDelegatedProviders() {
+  const container = els.codexbarDelegatedProviderCheckboxes;
+  if (!container) return;
+  const delegated = new Set(
+    String(state.settings?.codexbarDelegatedProviders || '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean)
+  );
+  const fragment = document.createDocumentFragment();
+  for (const { id, settingsLabel, label } of LIMIT_PROVIDERS.filter(
+    (provider) => codexbarDashboardProviderIds.has(provider.id)
+  )) {
+    const option = document.createElement('label');
+    option.className = 'client-checkbox';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.dataset.provider = id;
+    input.checked = delegated.has(id);
+    const text = document.createElement('span');
+    text.textContent = settingsLabel || label;
+    option.append(input, text);
+    fragment.append(option);
+  }
+  container.replaceChildren(fragment);
+}
+
+function hydrateCodexBarDashboardProviderIds(settings) {
+  codexbarDashboardProviderIds.clear();
+  for (const providerId of settings?.codexbarDashboardProviderIds || []) {
+    codexbarDashboardProviderIds.add(providerId);
+  }
+}
+
+const CODEXBAR_FEEDBACK_MAX_LENGTH = 240;
+const CODEXBAR_STATUS_KEYS = {
+  disabled: 'settings.codexbar.statusDisabled',
+  configured: 'settings.codexbar.statusConfigured',
+  connecting: 'settings.codexbar.statusConnecting',
+  active: 'settings.codexbar.statusActive',
+  degraded: 'settings.codexbar.statusDegraded',
+  error: 'settings.codexbar.statusError'
+};
+const CODEXBAR_DIAGNOSTIC_CODES = new Set([
+  'aborted', 'ambiguous-alias', 'incompatible-schema', 'invalid-json', 'invalid-payload',
+  'ownership-mismatch', 'payload-too-large', 'stale', 'timeout', 'unauthorized',
+  'unavailable', 'unknown-provider', 'unknown-window', 'unsafe-url'
+]);
+let codexbarDashboardStatusRefreshPromise = null;
+
+function setCodexBarFeedback(message) {
+  if (!els.codexbarDashboardFeedback) return;
+  els.codexbarDashboardFeedback.textContent = String(message || '').slice(0, CODEXBAR_FEEDBACK_MAX_LENGTH);
+}
+
+function syncCodexBarDashboardStatus() {
+  if (!els.codexbarDashboardStatus) return;
+  const dashboardStatus = state.settings?.codexbarDashboardStatus || {};
+  const status = CODEXBAR_STATUS_KEYS[dashboardStatus.status]
+    ? dashboardStatus.status
+    : (CODEXBAR_STATUS_KEYS[dashboardStatus.state] ? dashboardStatus.state : 'disabled');
+  const parts = [t(CODEXBAR_STATUS_KEYS[status])];
+  const connectedAt = dashboardStatus.connectedAt;
+  if (connectedAt) parts[0] += ` · ${formatTime(connectedAt)}`;
+  const producerVersion = String(dashboardStatus.producerVersion || '').trim();
+  if (/^[a-z0-9][a-z0-9.+_-]{0,63}$/i.test(producerVersion)) {
+    parts.push(t('settings.codexbar.statusVersion', { version: producerVersion }));
+  }
+  const generatedAt = dashboardStatus.generatedAt;
+  if (generatedAt) {
+    parts.push(t('settings.codexbar.statusGenerated', { age: formatUpdatedAge(generatedAt) }));
+  }
+  const diagnostics = Array.isArray(dashboardStatus.diagnostics) ? dashboardStatus.diagnostics : [];
+  const codes = [...new Set(diagnostics.map((entry) => {
+    const code = String(entry?.lastFailureCode || '');
+    return CODEXBAR_DIAGNOSTIC_CODES.has(code) ? code : '';
+  }).filter(Boolean))].slice(0, 3);
+  if (codes.length) parts.push(t('settings.codexbar.statusDiagnostics', { details: codes.join(', ') }));
+  els.codexbarDashboardStatus.textContent = parts.join(' · ');
+  els.codexbarDashboardStatus.classList.toggle('error', status === 'error');
+}
+
+async function refreshCodexBarDashboardStatus() {
+  if (codexbarDashboardStatusRefreshPromise) return codexbarDashboardStatusRefreshPromise.catch(() => null);
+  codexbarDashboardStatusRefreshPromise = (async () => {
+    const status = await window.tokenMonitor.getCodexBarDashboardStatus();
+    state.settings = { ...state.settings, codexbarDashboardStatus: status };
+    syncCodexBarDashboardStatus();
+    return status;
+  })();
+  try {
+    return await codexbarDashboardStatusRefreshPromise;
+  } catch (_) {
+    return null;
+  } finally {
+    codexbarDashboardStatusRefreshPromise = null;
+  }
+}
+
+function syncCodexBarSettingsForm() {
+  if (!els.codexbarDashboardEnabledInput) return;
+  els.codexbarDashboardEnabledInput.checked = Boolean(state.settings?.codexbarDashboardEnabled);
+  els.codexbarDashboardUrlInput.value = state.settings?.codexbarDashboardUrl || 'http://127.0.0.1:8080';
+  const tokenConfigured = Boolean(state.settings?.codexbarDashboardTokenConfigured);
+  els.codexbarDashboardTokenInput.dataset.configured = String(tokenConfigured);
+  els.codexbarDashboardTokenInput.placeholder = tokenConfigured ? '••••••••' : '';
+  renderCodexBarDelegatedProviders();
+  syncCodexBarDashboardStatus();
+}
+
+function saveCodexBarSettings() {
+  const token = els.codexbarDashboardTokenInput.value.trim();
+  const patch = {
+    codexbarDashboardEnabled: els.codexbarDashboardEnabledInput.checked,
+    codexbarDashboardUrl: els.codexbarDashboardUrlInput.value.trim(),
+    codexbarDelegatedProviders: Array.from(
+      els.codexbarDelegatedProviderCheckboxes.querySelectorAll('input[data-provider]:checked'),
+      (input) => input.dataset.provider
+    ).join(',')
+  };
+  if (token) patch.codexbarDashboardToken = token;
+  return (async () => {
+    try {
+      await saveSettings(patch);
+      els.codexbarDashboardFeedback?.classList.remove('error');
+      setCodexBarFeedback(t('settings.codexbar.saved'));
+    } catch (error) {
+      els.codexbarDashboardFeedback?.classList.add('error');
+      setCodexBarFeedback(t('settings.codexbar.saveError'));
+      throw error;
+    } finally {
+      els.codexbarDashboardTokenInput.value = '';
+    }
+  })();
+}
+
 function syncSettingsForm() {
   applySettingsTranslations();
   applyInitialBreakdownPreference();
@@ -8525,6 +8670,7 @@ function syncSettingsForm() {
   }
   els.showLimitSourceInput.checked = Boolean(state.settings.showLimitSource);
   els.maskLimitAccountEmailsInput.checked = Boolean(state.settings.maskLimitAccountEmails);
+  syncCodexBarSettingsForm();
   renderSubscriptionSettings();
   const showLimitUsed = state.settings.showLimitUsed ? 'used' : 'remaining';
   for (const input of els.showLimitUsedInputs || []) input.checked = input.value === showLimitUsed;
@@ -10979,6 +11125,7 @@ async function init() {
   if (!systemUiThemeSeeded) state.systemDarkUi = state.appInfo?.systemDarkUi === true;
   if (els.aboutVersion) els.aboutVersion.textContent = state.appInfo?.version ? `v${state.appInfo.version}` : '—';
   state.settings = await window.tokenMonitor.getSettings();
+  hydrateCodexBarDashboardProviderIds(state.settings);
   applyEffectiveCurrencyRates();
   deliverTrayProviderIcons();
 
@@ -11138,6 +11285,7 @@ els.settingsButton.addEventListener('click', (event) => {
   els.settingsPanel.classList.toggle('hidden');
   const settingsOpen = !els.settingsPanel.classList.contains('hidden');
   if (!settingsOpen) stopWindowShortcutRecording();
+  if (settingsOpen) void refreshCodexBarDashboardStatus();
   els.shell.classList.toggle('settings-open', settingsOpen);
   if (!settingsOpen && event.detail > 0) els.settingsButton.blur();
   els.shell.style.transform = 'translateZ(0)';
@@ -11267,6 +11415,11 @@ els.showLimitSourceInput.addEventListener('change', async () => {
 els.maskLimitAccountEmailsInput.addEventListener('change', async () => {
   await saveSettings({ maskLimitAccountEmails: els.maskLimitAccountEmailsInput.checked });
   renderLimits();
+});
+els.codexbarDashboardSaveButton?.addEventListener('click', () => {
+  void saveCodexBarSettings().catch(() => {
+    console.warn('CodexBar settings save failed.');
+  });
 });
 els.subscriptionAddToggle?.addEventListener('click', () => {
   const opening = els.subscriptionAddDetails?.classList.contains('hidden');
@@ -11778,6 +11931,9 @@ window.tokenMonitor.onStatsPush?.((payload) => {
     if (payload.data?.reason !== 'progress') state.trendsActivating = false;
   } else {
     return;
+  }
+  if (payload.data?.stats && !els.settingsPanel?.classList.contains('hidden')) {
+    void refreshCodexBarDashboardStatus();
   }
   setLiveDot(state.streamConnected);
   setStatus(statusTextFor(state.mode, state.streamConnected));

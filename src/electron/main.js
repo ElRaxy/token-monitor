@@ -16,6 +16,11 @@ const {
   stripCredentialSettings,
   writePrivateJsonAtomic
 } = require('../shared/credentialStore');
+const {
+  CODEXBAR_DASHBOARD_PROVIDER_IDS,
+  DEFAULT_CODEXBAR_DASHBOARD_URL,
+  normalizeCodexBarConfig
+} = require('../shared/codexbarConfig');
 const { installSafeStdout } = require('../shared/safeStdio');
 const { appVersion } = require('../shared/appVersion');
 const { macWidgetRuntimeSupport } = require('../shared/macSystemRequirements');
@@ -500,6 +505,10 @@ function defaultSettings() {
     homeLimitAccountCount: HOME_LIMIT_ACCOUNT_COUNT_DEFAULT,
     limitsRefreshMode: normalizeLimitsRefreshMode(process.env.TOKEN_MONITOR_LIMITS_REFRESH_MODE),
     limitsRefreshMs: normalizeLimitsRefreshMs(process.env.TOKEN_MONITOR_LIMITS_REFRESH_MS),
+    codexbarDashboardEnabled: false,
+    codexbarDashboardUrl: DEFAULT_CODEXBAR_DASHBOARD_URL,
+    codexbarDashboardToken: '',
+    codexbarDelegatedProviders: [],
     showLimitSource: parseBoolean(process.env.TOKEN_MONITOR_SHOW_LIMIT_SOURCE, false),
     maskLimitAccountEmails: false,
     claudePrepaidBalanceEnabled: parseBoolean(process.env.TOKEN_MONITOR_CLAUDE_PREPAID_BALANCE, true),
@@ -653,12 +662,14 @@ function electronUsageConfig(errorPrefix) {
 }
 
 function electronLimitsConfig() {
+  const codexbarConfig = normalizeCodexBarConfig(settings);
   const workbuddyEnabled = settings?.limitsEnabled !== false
     && parseLimitProviders(settings?.limitProviders).includes('workbuddy');
   const workbuddyDesktopSessionSupported = isSupportedWorkbuddyLocalAppPlatform();
   const workbuddyDesktopSessionEnabled = workbuddyEnabled && workbuddyDesktopSessionSupported;
-  return limitsConfigFromSettings(settings, {
+  return limitsConfigFromSettings({ ...settings, ...codexbarConfig }, {
     env: process.env,
+    codexbarDashboardToken: codexbarConfig.codexbarDashboardToken,
     workbuddyDesktopSessionOnly: true,
     workbuddyDesktopSessionSupported,
     workbuddyDesktopSessionEnabled,
@@ -2132,6 +2143,26 @@ function readSettings() {
     const storedCredentials = loadCredentialSettings(saved);
     if (!saved.secret && defaults.secret) delete saved.secret;
     const merged = { ...defaults, ...saved, ...storedCredentials };
+    let codexbarConfig;
+    try {
+      codexbarConfig = normalizeCodexBarConfig(merged);
+    } catch (_) {
+      try {
+        codexbarConfig = normalizeCodexBarConfig({
+          ...merged,
+          codexbarDashboardEnabled: false
+        });
+      } catch (_) {
+        try {
+          codexbarConfig = normalizeCodexBarConfig({
+            codexbarDashboardToken: merged.codexbarDashboardToken
+          });
+        } catch (_) {
+          codexbarConfig = normalizeCodexBarConfig();
+        }
+      }
+    }
+    Object.assign(merged, codexbarConfig);
     // Migrate older configs that predate hubMode: infer from hubUrl.
     if (saved.hubMode === undefined) {
       merged.hubMode = (saved.hubUrl && String(saved.hubUrl).trim()) ? 'client' : 'local';
@@ -2636,6 +2667,7 @@ const diagnosticSnapshotBuilder = createDiagnosticSnapshotBuilder({
     },
     limits: {
       env: process.env,
+      codexbarDashboardToken: settings?.codexbarDashboardToken || '',
       defaultLimitProviders: defaultLimitProviders()
     },
     syncUploadIntervalMs: syncUploadIntervalMs()
@@ -4358,6 +4390,121 @@ function thirdPartyProfileWithCanonicalIdentity(profile, provider) {
   });
 }
 
+function hasCodexBarDashboardCredential() {
+  return Boolean(settings?.codexbarDashboardToken);
+}
+
+function codexbarDashboardStatus() {
+  const enabled = settings?.codexbarDashboardEnabled === true;
+  const delegatedProviders = [...new Set((Array.isArray(settings?.codexbarDelegatedProviders)
+    ? settings.codexbarDelegatedProviders
+    : String(settings?.codexbarDelegatedProviders || '').split(','))
+    .map((provider) => String(provider || '').trim().toLowerCase())
+    .filter(Boolean))];
+  const configured = hasCodexBarDashboardCredential() && delegatedProviders.length > 0;
+  if (!enabled) {
+    return {
+      enabled,
+      configured,
+      status: 'disabled',
+      connectedAt: null,
+      producerVersion: null,
+      generatedAt: null,
+      staleAfterMs: null,
+      diagnostics: []
+    };
+  }
+
+  let limitsDiagnostics = null;
+  let limitsSnapshot = null;
+  try {
+    const runtimeDiagnostics = typeof deviceRuntimeHandle?.getDiagnostics === 'function'
+      ? deviceRuntimeHandle.getDiagnostics()
+      : deviceRuntimeHandle?.getDiagnostics?.();
+    limitsDiagnostics = runtimeDiagnostics?.limits || null;
+  } catch (_) {}
+  try {
+    const runtimeSnapshot = typeof deviceRuntimeHandle?.getSnapshot === 'function'
+      ? deviceRuntimeHandle.getSnapshot()
+      : deviceRuntimeHandle?.getSnapshot?.();
+    limitsSnapshot = runtimeSnapshot?.limits || null;
+  } catch (_) {}
+
+  const delegated = new Set(delegatedProviders);
+  const safeTimestamp = (value) => {
+    const timestamp = typeof value === 'string' ? value.trim() : '';
+    return Number.isFinite(Date.parse(timestamp)) ? timestamp : null;
+  };
+  const diagnostics = (Array.isArray(limitsDiagnostics?.providers) ? limitsDiagnostics.providers : [])
+    .filter((entry) => delegated.has(String(entry?.provider || '').trim().toLowerCase()))
+    .map((entry) => {
+      const failureCode = String(entry?.lastFailureCode || '').trim();
+      const pending = Number(entry?.pending);
+      return {
+        provider: String(entry?.provider || '').trim().toLowerCase(),
+        active: entry?.active === true,
+        pending: Number.isFinite(pending) ? Math.max(0, Math.floor(pending)) : 0,
+        lastAttemptAt: safeTimestamp(entry?.lastAttemptAt),
+        lastSuccessAt: safeTimestamp(entry?.lastSuccessAt),
+        lastFailureCode: /^[a-z][a-z0-9_-]{0,63}$/i.test(failureCode) ? failureCode : null
+      };
+    });
+  const rows = (Array.isArray(limitsSnapshot?.providers) ? limitsSnapshot.providers : [])
+    .filter((row) => row?.producer === 'codexbar'
+      && delegated.has(String(row?.provider || '').trim().toLowerCase()));
+
+  let latestRow = null;
+  let latestRowAt = Number.NEGATIVE_INFINITY;
+  for (const row of rows) {
+    const producedAt = Date.parse(String(row?.producedAt || ''));
+    if (Number.isFinite(producedAt) && producedAt > latestRowAt) {
+      latestRow = row;
+      latestRowAt = producedAt;
+    }
+  }
+  const successful = diagnostics
+    .map((entry) => ({ at: Date.parse(entry.lastSuccessAt || ''), value: entry.lastSuccessAt }))
+    .filter((entry) => Number.isFinite(entry.at))
+    .sort((left, right) => right.at - left.at);
+  const failed = diagnostics
+    .filter((entry) => entry.lastFailureCode)
+    .map((entry) => Date.parse(entry.lastAttemptAt || ''))
+    .filter(Number.isFinite)
+    .sort((left, right) => right - left);
+  const connectedAt = successful[0]?.value || null;
+  const latestSuccessAt = successful[0]?.at ?? Number.NEGATIVE_INFINITY;
+  const latestFailureAt = failed[0] ?? Number.NEGATIVE_INFINITY;
+  const failureIsLatest = latestFailureAt > latestSuccessAt;
+  const inFlight = diagnostics.some((entry) => entry.active || entry.pending > 0);
+  const staleAfterMs = Number(latestRow?.staleAfterMs);
+  const latestRowExpired = Boolean(latestRow)
+    && Number.isFinite(staleAfterMs)
+    && staleAfterMs > 0
+    && Date.now() > latestRowAt + staleAfterMs;
+  const latestRowUnhealthy = Boolean(latestRow)
+    && String(latestRow?.status || '').trim().toLowerCase() !== 'ok';
+  const latestRowHasUsableLimits = Array.isArray(latestRow?.windows)
+    && latestRow.windows.length > 0;
+  let status = configured ? 'configured' : 'error';
+  if (latestRow && (latestRowUnhealthy || latestRowExpired)) {
+    status = latestRowHasUsableLimits ? 'degraded' : 'error';
+  } else if (failureIsLatest) status = latestRow ? 'degraded' : 'error';
+  else if (latestRow) status = 'active';
+  else if (inFlight) status = 'connecting';
+
+  const version = String(latestRow?.producerVersion || '').trim();
+  return {
+    enabled,
+    configured,
+    status,
+    connectedAt,
+    producerVersion: /^[a-z0-9][a-z0-9.+_-]{0,63}$/i.test(version) ? version : null,
+    generatedAt: safeTimestamp(latestRow?.producedAt),
+    staleAfterMs: Number.isFinite(staleAfterMs) && staleAfterMs > 0 ? staleAfterMs : null,
+    diagnostics
+  };
+}
+
 function settingsForRenderer() {
   const claudeWebCookieSource = settings?.claudeWebCookie
     ? 'settings'
@@ -4430,7 +4577,9 @@ function settingsForRenderer() {
   const redactedCredentials = credentialSettingsForRenderer(settings, {
     expose: ['hubHostSecret', 'secret']
   });
+  delete redactedCredentials.codexbarDashboardToken;
   const rendererSettings = { ...settings };
+  delete rendererSettings.codexbarDashboardToken;
   for (const key of [
     'workbuddyAccessToken',
     'workbuddyUserId',
@@ -4508,6 +4657,9 @@ function settingsForRenderer() {
     kimiWebAccessTokenSource,
     kimiCredentialConfigured: Boolean(currentKimiWebAccessToken() || currentKimiApiKey()),
     kimiCredentialSource: kimiWebAccessTokenSource || kimiApiKeySource,
+    codexbarDashboardProviderIds: CODEXBAR_DASHBOARD_PROVIDER_IDS,
+    codexbarDashboardTokenConfigured: Boolean(settings?.codexbarDashboardToken),
+    codexbarDashboardStatus: codexbarDashboardStatus(),
     currencyRatesEffective: effectiveRates || resolveEffectiveRates(rateCache?.rates || {}, settings?.currencyRates || {}),
     currencyRateInfo: rateCache ? { source: rateCache.source, date: rateCache.date, fetchedAt: rateCache.fetchedAt } : null,
     windowToggleShortcutStatus: currentWindowToggleShortcutStatus()
@@ -6107,6 +6259,7 @@ app.whenReady().then(() => {
   rateRefreshTimer = setInterval(() => { refreshExchangeRates(); }, 6 * 60 * 60 * 1000);
   setTimeout(() => { checkTokscaleNpm({ silent: true }); }, 2000);
   ipcMain.handle('settings:get', () => settingsForRenderer());
+  ipcMain.handle('codexbar:status', () => codexbarDashboardStatus());
 
   ipcMain.handle('subscriptions:adoptOrphans', async () => {
     try {
@@ -6150,6 +6303,20 @@ app.whenReady().then(() => {
     }
   });
   ipcMain.handle('settings:update', (_event, patch) => {
+    const codexbarConfig = normalizeCodexBarConfig({
+      codexbarDashboardEnabled: patch?.codexbarDashboardEnabled !== undefined
+        ? patch.codexbarDashboardEnabled
+        : settings.codexbarDashboardEnabled,
+      codexbarDashboardUrl: patch?.codexbarDashboardUrl !== undefined
+        ? patch.codexbarDashboardUrl
+        : settings.codexbarDashboardUrl,
+      codexbarDashboardToken: patch?.codexbarDashboardToken !== undefined
+        ? patch.codexbarDashboardToken
+        : settings.codexbarDashboardToken,
+      codexbarDelegatedProviders: patch?.codexbarDelegatedProviders !== undefined
+        ? patch.codexbarDelegatedProviders
+        : settings.codexbarDelegatedProviders
+    });
     if (patch?.claudeWebCookie !== undefined) claudeWebCookieMutationRevision += 1;
     const previousSettingsState = settings;
     const previousRuntimeSettings = JSON.parse(JSON.stringify(settings));
@@ -6171,7 +6338,9 @@ app.whenReady().then(() => {
     const previousAutomaticAppUpdates = settings.automaticAppUpdates;
     const previousCustomModelPricing = JSON.stringify(settings.customModelPricing || []);
     const normalizedCurrency = patch.currency !== undefined ? normalizeCurrency(patch.currency, settings.currency) : normalizeCurrency(settings.currency);
-    const normalizedPatch = { ...patch, currency: normalizedCurrency };
+    const normalizedPatch = { ...patch, currency: normalizedCurrency, ...codexbarConfig };
+    delete normalizedPatch.codexbarDashboardProviderIds;
+    delete normalizedPatch.codexbarDashboardTokenConfigured;
     delete normalizedPatch.windowMaximized;
     delete normalizedPatch.codexManagedAccounts;
     delete normalizedPatch.mimoManagedAccounts;
@@ -6300,6 +6469,10 @@ app.whenReady().then(() => {
       serviceStatusRefreshMs: normalizeServiceStatusRefreshMs(patch.serviceStatusRefreshMs ?? settings.serviceStatusRefreshMs),
       limitsRefreshMode: normalizeLimitsRefreshMode(patch.limitsRefreshMode ?? settings.limitsRefreshMode),
       limitsRefreshMs: normalizeLimitsRefreshMs(patch.limitsRefreshMs ?? settings.limitsRefreshMs),
+      codexbarDashboardEnabled: codexbarConfig.codexbarDashboardEnabled,
+      codexbarDashboardUrl: codexbarConfig.codexbarDashboardUrl,
+      codexbarDashboardToken: codexbarConfig.codexbarDashboardToken,
+      codexbarDelegatedProviders: codexbarConfig.codexbarDelegatedProviders,
       showLimitSource: parseBoolean(patch.showLimitSource ?? settings.showLimitSource, false),
       maskLimitAccountEmails: parseBoolean(patch.maskLimitAccountEmails ?? settings.maskLimitAccountEmails, false),
       claudePrepaidBalanceEnabled: parseBoolean(patch.claudePrepaidBalanceEnabled ?? settings.claudePrepaidBalanceEnabled, true),

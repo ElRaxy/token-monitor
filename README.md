@@ -10,6 +10,13 @@
     <em>One live dashboard for every AI coding tool, synced across every machine.</em>
 </p>
 
+> [!NOTE]
+> **Community integration fork.** [`ElRaxy/token-monitor`](https://github.com/ElRaxy/token-monitor) adds an optional, read-only integration with [CodexBar](https://github.com/steipete/CodexBar) through its public `dashboard-v1` API. The projects remain independent: their repositories, runtimes, credentials, and update channels are not merged.
+>
+> The integration is disabled by default, accepts only authenticated HTTP loopback endpoints, and fails closed without silently running duplicate native probes. See [CodexBar dashboard-v1 limits](docs/configuration.md#codexbar-dashboard-v1-limits) for setup and security details.
+>
+> **Credits:** Token Monitor was created by [Javis (`Javis603`)](https://github.com/Javis603); CodexBar was created by [Peter Steinberger (`steipete`)](https://github.com/steipete). This integration is maintained by [Alex (`ElRaxy`)](https://github.com/ElRaxy). Both upstream projects use the MIT License; this fork retains Token Monitor's original [license and notices](LICENSE), links to [CodexBar's upstream license](https://github.com/steipete/CodexBar/blob/main/LICENSE), and is an independent community project, with no upstream affiliation or endorsement implied.
+
 <p align="center">
     <a href="https://github.com/Javis603/token-monitor/releases"><img src="https://img.shields.io/github/v/release/Javis603/token-monitor?include_prereleases&style=flat-square&label=release&color=22c55e" alt="Latest release" /></a>
     <a href="https://github.com/Javis603/token-monitor/releases"><img src="https://img.shields.io/github/downloads/Javis603/token-monitor/total?style=flat-square&color=22c55e" alt="Total downloads" /></a>
@@ -153,7 +160,7 @@ Most usage monitors are useful on the machine they run on. Token Monitor is buil
 
 ## Installation
 
-Download from [GitHub Releases](https://github.com/Javis603/token-monitor/releases).
+The downloads below are the official [Token Monitor upstream releases](https://github.com/Javis603/token-monitor/releases). They do not include this fork's CodexBar integration. To use the integration, [build this fork from source](#build-from-source); this repository does not currently publish fork-specific binaries.
 
 - **macOS (Apple Silicon)** — `.dmg`, signed and notarized
 - **macOS (Intel)** — x64 `.dmg`, signed and notarized

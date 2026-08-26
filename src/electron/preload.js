@@ -4,6 +4,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('tokenMonitor', {
   getSettings: () => ipcRenderer.invoke('settings:get'),
+  getCodexBarDashboardStatus: () => ipcRenderer.invoke('codexbar:status'),
   updateSettings: (patch) => ipcRenderer.invoke('settings:update', patch),
   // Subscriptions are shared across devices when a hub is configured, so they
   // have their own channel: the write is a network round trip main.js has to

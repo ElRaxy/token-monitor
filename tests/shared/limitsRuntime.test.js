@@ -1223,3 +1223,260 @@ test('a retained transient previous row seeds lastGood windows after restart', (
   assert.equal(row.windows[0].usedPercent, 20);
   runtime.stop();
 });
+
+const CODEXBAR_NOW_MS = Date.parse('2026-08-25T08:01:00.000Z');
+const CODEXBAR_RUNTIME_OPTIONS = Object.freeze({
+  codexbarDashboardEnabled: true,
+  codexbarDashboardUrl: 'http://127.0.0.1:8080',
+  codexbarDashboardToken: 'fixture-token',
+  codexbarDelegatedProviders: 'codex,claude'
+});
+
+function codexbarRuntimeOptions(overrides = {}) {
+  return { ...CODEXBAR_RUNTIME_OPTIONS, ...overrides };
+}
+
+function codexbarDashboardResult(options = {}) {
+  const producedAt = options.producedAt || '2026-08-25T08:00:00.000Z';
+  const staleAfterMs = options.staleAfterMs ?? 180_000;
+  const producerVersion = options.producerVersion || '0.55.0';
+  const usedPercent = options.usedPercent ?? 25;
+  const providers = options.providers || ['codex', 'claude'];
+  return {
+    limits: {
+      updatedAt: producedAt,
+      refreshMs: 90_000,
+      providers: providers.map((provider, index) => ({
+        provider,
+        source: provider === 'codex' ? 'oauth' : 'web',
+        status: 'ok',
+        updatedAt: producedAt,
+        windows: [{
+          kind: 'session',
+          label: `${provider} fixture`,
+          usedPercent: usedPercent + index,
+          resetsAt: '2026-08-25T13:00:00.000Z'
+        }],
+        producer: 'codexbar',
+        producerVersion,
+        producedAt,
+        staleAfterMs
+      }))
+    },
+    meta: {
+      schemaVersion: 1,
+      producer: 'codexbar',
+      producerVersion,
+      generatedAt: producedAt,
+      staleAfterMs
+    },
+    diagnostics: []
+  };
+}
+
+test('R6 provider delegado usa CodexBar y ejecuta cero probes nativos', async () => {
+  let dashboardFetchCalls = 0;
+  let nativeProbeCalls = 0;
+  let dashboardOptions;
+  const runtime = createLimitsRuntime(codexbarRuntimeOptions({
+    limitProviders: ['codex']
+  }), runtimeDeps({
+    autoRetry: false,
+    now: () => CODEXBAR_NOW_MS,
+    fetchCodexBarDashboard: async (options) => {
+      dashboardFetchCalls += 1;
+      dashboardOptions = options;
+      return codexbarDashboardResult({ providers: ['codex'] });
+    },
+    probeProvider: async () => {
+      nativeProbeCalls += 1;
+      return [providerRow('codex', 'native', 'Native Codex')];
+    }
+  }));
+
+  try {
+    await runtime.refresh({ provider: 'codex' }, 'manual');
+
+    assert.deepEqual({ dashboardFetchCalls, nativeProbeCalls }, {
+      dashboardFetchCalls: 1,
+      nativeProbeCalls: 0
+    });
+    assert.equal(dashboardOptions.baseUrl, 'http://127.0.0.1:8080');
+    assert.equal(dashboardOptions.token, 'fixture-token');
+    assert.equal(dashboardOptions.signal instanceof AbortSignal, true);
+    const row = runtime.getSnapshot().providers[0];
+    assert.equal(row.provider, 'codex');
+    assert.equal(row.producer, 'codexbar');
+    assert.equal(row.source, 'oauth');
+  } finally {
+    runtime.stop();
+  }
+});
+
+test('R7 provider nativo conserva lane deadline retry y probe actual', async () => {
+  let dashboardFetchCalls = 0;
+  let nativeProbeCalls = 0;
+  let nativeRequest;
+  const runtime = createLimitsRuntime(codexbarRuntimeOptions({
+    limitProviders: ['kimi']
+  }), runtimeDeps({
+    autoRetry: false,
+    now: () => CODEXBAR_NOW_MS,
+    fetchCodexBarDashboard: async () => {
+      dashboardFetchCalls += 1;
+      return codexbarDashboardResult({ providers: ['kimi'] });
+    },
+    probeProvider: async (provider, configSnapshot, context) => {
+      nativeProbeCalls += 1;
+      nativeRequest = { provider, configSnapshot, context };
+      return [providerRow('kimi', 'native', 'Native Kimi')];
+    }
+  }));
+
+  try {
+    await runtime.refresh({ provider: 'kimi' }, 'manual');
+
+    assert.deepEqual({ dashboardFetchCalls, nativeProbeCalls }, {
+      dashboardFetchCalls: 0,
+      nativeProbeCalls: 1
+    });
+    assert.equal(nativeRequest.provider, 'kimi');
+    assert.deepEqual(nativeRequest.configSnapshot.limitProviders, ['kimi']);
+    assert.equal(nativeRequest.context.signal instanceof AbortSignal, true);
+    assert.equal(Number.isFinite(nativeRequest.context.deadlineMs), true);
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(nativeRequest.configSnapshot, 'codexbarDashboardToken'),
+      false,
+      'the CodexBar bearer must only reach fetchCodexBarDashboard'
+    );
+    assert.equal(runtime.getSnapshot().providers[0].accountLabel, 'Native Kimi');
+  } finally {
+    runtime.stop();
+  }
+});
+
+test('R8 coalesce el snapshot y publica solo la generación latest-wins', async () => {
+  const oldFetch = deferred();
+  const latestFetch = deferred();
+  const dashboardRequests = [];
+  const updates = [];
+  let nativeProbeCalls = 0;
+  const runtime = createLimitsRuntime(codexbarRuntimeOptions({
+    limitProviders: ['codex', 'claude']
+  }), runtimeDeps({
+    autoRetry: false,
+    maxConcurrency: 2,
+    now: () => CODEXBAR_NOW_MS,
+    onUpdate: (summary) => updates.push(summary),
+    fetchCodexBarDashboard: (options) => {
+      dashboardRequests.push(options);
+      return dashboardRequests.length === 1 ? oldFetch.promise : latestFetch.promise;
+    },
+    probeProvider: async (provider) => {
+      nativeProbeCalls += 1;
+      return [providerRow(provider, 'native', `Native ${provider}`)];
+    }
+  }));
+
+  try {
+    const firstRefresh = runtime.refresh({}, 'manual');
+    await waitFor(() => dashboardRequests.length === 1, 'coalesced old dashboard fetch', 500);
+
+    runtime.reconfigure({
+      codexbarDashboardUrl: 'http://localhost:9090',
+      codexbarDashboardToken: 'latest-token',
+      codexbarDelegatedProviders: 'codex,claude,kimi'
+    });
+    await waitFor(() => dashboardRequests.length === 2, 'latest dashboard fetch', 500);
+
+    assert.equal(dashboardRequests[0].signal.aborted, true);
+    assert.equal(dashboardRequests[1].baseUrl, 'http://localhost:9090');
+    assert.equal(dashboardRequests[1].token, 'latest-token');
+    latestFetch.resolve(codexbarDashboardResult({
+      producerVersion: 'latest',
+      usedPercent: 40
+    }));
+    await waitFor(() => {
+      const rows = runtime.getSnapshot().providers;
+      return rows.length === 2 && rows.every((row) => row.producerVersion === 'latest');
+    }, 'latest generation publication', 500);
+
+    oldFetch.resolve(codexbarDashboardResult({
+      producerVersion: 'old',
+      usedPercent: 5
+    }));
+    await firstRefresh;
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(dashboardRequests.length, 2);
+    assert.equal(nativeProbeCalls, 0);
+    assert.deepEqual(
+      runtime.getSnapshot().providers.map((row) => row.provider).sort(),
+      ['claude', 'codex']
+    );
+    assert.equal(
+      updates.some((summary) => summary.providers.some((row) => row.producerVersion === 'old')),
+      false
+    );
+  } finally {
+    runtime.stop();
+    oldFetch.resolve(codexbarDashboardResult({ producerVersion: 'old-cleanup' }));
+    latestFetch.resolve(codexbarDashboardResult({ producerVersion: 'latest-cleanup' }));
+  }
+});
+
+test('R9 fallo o staleness no activa fallback nativo silencioso', async () => {
+  const clock = fakeClock(CODEXBAR_NOW_MS);
+  const producedAt = new Date(clock.now()).toISOString();
+  let dashboardFetchCalls = 0;
+  let nativeProbeCalls = 0;
+  const runtime = createLimitsRuntime(codexbarRuntimeOptions({
+    limitProviders: ['codex']
+  }), runtimeDeps({
+    autoRetry: false,
+    now: clock.now,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+    fetchCodexBarDashboard: async () => {
+      dashboardFetchCalls += 1;
+      if (dashboardFetchCalls === 1) {
+        return codexbarDashboardResult({
+          producedAt,
+          staleAfterMs: 1_000,
+          providers: ['codex']
+        });
+      }
+      const error = new Error('synthetic stale CodexBar snapshot');
+      error.code = 'stale';
+      error.status = 'unavailable';
+      throw error;
+    },
+    probeProvider: async () => {
+      nativeProbeCalls += 1;
+      return [providerRow('codex', 'native', 'Native fallback')];
+    }
+  }));
+
+  try {
+    await runtime.refresh({ provider: 'codex' }, 'manual');
+    clock.jump(900);
+    await runtime.refresh({ provider: 'codex' }, 'settings-change');
+    const retained = runtime.getSnapshot().providers[0];
+    assert.equal(retained.status, 'unavailable');
+    assert.equal(retained.windows.length, 1);
+    assert.equal(retained.producer, 'codexbar');
+
+    clock.jump(101);
+    await runtime.refresh({ provider: 'codex' }, 'settings-change');
+    const expired = runtime.getSnapshot().providers[0];
+    assert.equal(expired.status, 'unavailable');
+    assert.deepEqual(expired.windows, []);
+    assert.equal(expired.producer, 'codexbar');
+    assert.deepEqual({ dashboardFetchCalls, nativeProbeCalls }, {
+      dashboardFetchCalls: 3,
+      nativeProbeCalls: 0
+    });
+  } finally {
+    runtime.stop();
+  }
+});
